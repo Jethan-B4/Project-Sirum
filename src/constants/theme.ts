@@ -1,9 +1,7 @@
 /**
- * Below are the colors that are used in the app. The colors are defined in the light and dark mode.
- * There are many other ways to style your app. For example, [Nativewind](https://www.nativewind.dev/), [Tamagui](https://tamagui.dev/), [unistyles](https://unistyl.es/), etc.
+ * Design tokens for Sirum — colors, typography, spacing, and layout constants.
+ * Mobile-only: no web CSS imports. All values are React Native compatible.
  */
-
-import '@/global.css';
 
 import { Platform } from 'react-native';
 

@@ -5,9 +5,15 @@ import { useColorScheme } from 'react-native';
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import AppTabs from '@/components/app-tabs';
 
-SplashScreen.preventAutoHideAsync();
+import { getDb } from '@/db/client';
+import { useEffect } from 'react';
 
-export default function TabLayout() {
+export default function RootLayout() {
+  useEffect(() => {
+    getDb().catch((err) => console.error('DB init failed', err));
+  }, []);
+
+  SplashScreen.preventAutoHideAsync();
   const colorScheme = useColorScheme();
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>

@@ -1,5 +1,9 @@
 # Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
 
+# env
+.env
+.env.*
+
 # dependencies
 node_modules/
 
@@ -37,6 +41,10 @@ yarn-error.*
 *.tsbuildinfo
 
 example
+
+# IDE / Editor
+.idea/
+.vscode/
 
 # generated native folders
 /ios
