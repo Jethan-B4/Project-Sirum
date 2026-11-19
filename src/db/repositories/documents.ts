@@ -1,4 +1,5 @@
 import { getDb } from '../client';
+import { FINISHED_THRESHOLD, type DocumentFormat, type ReadingStatus } from '../../lib/settingsKeys';
 
 export interface DocumentRow {
   id: string;
@@ -24,50 +25,98 @@ export interface DocumentRow {
   sync_error: string | null;
 }
 
+/** A document joined with its synced reading progress (for library/history display). */
+export interface LibraryDocument extends DocumentRow {
+  /** Book-wide progress 0–1, or null when the book has never been opened. */
+  percent: number | null;
+  last_read_at: string | null;
+}
+
 export type DocumentInput = Omit<
   DocumentRow,
   'created_at' | 'updated_at' | 'deleted_at' | 'dirty' | 'server_updated_at' | 'sync_error'
 >;
 
+export interface ListDocumentsOptions {
+  search?: string;
+  orderMode?: 'recent' | 'fixed';
+  sort?: 'title' | 'author' | 'added' | 'lastRead' | 'progress';
+  sortDirection?: 'asc' | 'desc';
+  formats?: DocumentFormat[];
+  status?: ReadingStatus[];
+}
+
+const FORMAT_VALUES: DocumentFormat[] = ['epub', 'txt', 'pdf'];
+
 export const documents = {
-  async list(opts?: {
-    search?: string;
-    sort?: string;
-    sortDirection?: 'asc' | 'desc';
-    orderMode?: 'recent' | 'fixed';
-  }): Promise<DocumentRow[]> {
+  /**
+   * Library listing. Always LEFT JOINs reading_progress so each row carries the
+   * book-wide `percent` and `last_read_at` used for display, sorting, and filters.
+   * Ordering follows `library.orderMode`: 'recent' sorts by the latest of
+   * last_opened_at / last_read_at / created_at; 'fixed' uses the chosen sort.
+   */
+  async list(opts?: ListDocumentsOptions): Promise<LibraryDocument[]> {
     const db = await getDb();
-    const conditions: string[] = ["deleted_at IS NULL"];
+    const conditions: string[] = ['d.deleted_at IS NULL'];
     const params: (string | number)[] = [];
 
     if (opts?.search) {
-      conditions.push("(title LIKE ? OR author LIKE ?)");
+      conditions.push('(d.title LIKE ? OR d.author LIKE ?)');
       params.push(`%${opts.search}%`, `%${opts.search}%`);
+    }
+
+    const formats = (opts?.formats ?? []).filter((f) => FORMAT_VALUES.includes(f));
+    if (formats.length > 0) {
+      conditions.push(`d.format IN (${formats.map(() => '?').join(',')})`);
+      params.push(...formats);
+    }
+
+    const status = opts?.status ?? [];
+    if (status.length > 0) {
+      const statusClauses: string[] = [];
+      for (const s of status) {
+        if (s === 'unread') {
+          statusClauses.push('p.document_id IS NULL');
+        } else if (s === 'finished') {
+          statusClauses.push(`COALESCE(p.percent, 0) >= ${FINISHED_THRESHOLD}`);
+        } else {
+          // 'inProgress': a progress row exists but the book is not finished.
+          statusClauses.push('p.document_id IS NOT NULL AND COALESCE(p.percent, 0) < ?');
+          params.push(FINISHED_THRESHOLD);
+        }
+      }
+      conditions.push(`(${statusClauses.join(' OR ')})`);
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     let orderBy: string;
     if (opts?.orderMode === 'recent') {
-      orderBy = 'ORDER BY COALESCE(last_opened_at, created_at) DESC';
+      // Recency = latest of device-local last_opened_at, synced last_read_at, created_at.
+      // ISO 8601 UTC strings compare correctly as text.
+      orderBy =
+        'ORDER BY MAX(COALESCE(d.last_opened_at, \'\'), COALESCE(p.last_read_at, \'\'), d.created_at) DESC';
     } else {
-      const col = opts?.sort ?? 'created_at';
-      const dir = opts?.sortDirection ?? 'desc';
-      const safeDir = dir === 'asc' ? 'ASC' : 'DESC';
-      // Map friendly sort names to column names
-      const colMap: Record<string, string> = {
-        title: 'title',
-        author: 'author',
-        added: 'created_at',
-        lastRead: 'last_opened_at',
-        progress: 'char_count',
+      const dir = opts?.sortDirection === 'asc' ? 'ASC' : 'DESC';
+      const colMap: Record<NonNullable<ListDocumentsOptions['sort']>, string> = {
+        title: 'd.title COLLATE NOCASE',
+        author: 'COALESCE(d.author, \'\') COLLATE NOCASE',
+        added: 'd.created_at',
+        lastRead: 'COALESCE(p.last_read_at, \'\')',
+        progress: 'COALESCE(p.percent, 0)',
       };
-      const safeCol = colMap[col] ?? col;
-      orderBy = `ORDER BY ${safeCol} ${safeDir}`;
+      orderBy = `ORDER BY ${colMap[opts?.sort ?? 'added']} ${dir}`;
     }
 
-    return db.getAllAsync<DocumentRow>(
-      `SELECT * FROM documents ${where} ${orderBy}`,
+    return db.getAllAsync<LibraryDocument>(
+      `SELECT d.*,
+              p.percent       AS percent,
+              p.last_read_at  AS last_read_at
+       FROM documents d
+       LEFT JOIN reading_progress p
+         ON p.document_id = d.id AND p.deleted_at IS NULL
+       ${where}
+       ${orderBy}`,
       params
     );
   },
@@ -150,6 +199,11 @@ export const documents = {
     );
   },
 
+  /**
+   * Records that this device opened the book. Writes ONLY the local-only
+   * `last_opened_at` column — never `updated_at`, never `dirty` — so opening a
+   * book does not trigger a sync push or overwrite synced metadata.
+   */
   async touchOpened(id: string): Promise<void> {
     const db = await getDb();
     const now = new Date().toISOString();

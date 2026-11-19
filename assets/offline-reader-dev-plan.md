@@ -20,6 +20,9 @@
 | 6 | **Progress display** | A synced setting, `reader.percentageMode`, asks the user whether to show **book-wide** or **chapter-only** percentage |
 | 7 | **Runtime** | **Expo Go** for Phases 1 to 4, then an **EAS (cloud) development build** from Phase 5 for native Google Sign-In |
 | 8 | **Library order** | A synced setting, `library.orderMode`, asks the user whether opening a book moves it to the top of the library (**recent**) or the list keeps a **fixed** order from the chosen sort and filters |
+| 9 | **Layouts and views** | Two navigation layouts, a **bottom bar** or a **hidden side drawer**, and a default library layout of **2 or 3 columns**. The library filter sheet also offers list view or grid view from 2×2 to 4×4. Reference: `sirum-ui-prototype.html` |
+| 10 | **Import methods** | **Manual import** (file picker) and **device scan** (Android only, through a folder the user grants access to). A setting chooses the default method. |
+| 11 | **Settings and display** | A categorized settings hub (Appearance, Library, Reader, Import and storage, Sync, About). App color theme, accent color, and app font are device-local. The reading style (font family, weight, size, line height, margins, background and text color) has a synced default plus optional **per-book overrides**. The library can hide format/progress badges and title/author. |
 
 ---
 
@@ -60,8 +63,10 @@
 ### 2.1 Define the MVP
 
 **In scope for v1:**
-- Import **`.epub`** (primary), **`.txt`**, and **`.pdf`** files from device storage
+- Import **`.epub`** (primary), **`.txt`**, and **`.pdf`** files from device storage, by manual import or by scanning a folder the user allows
 - Library screen (list with cover, search, sort, filter, delete) with a user-chosen ordering mode: recently opened first, or fixed order
+- Two navigation layouts (bottom bar or hidden side drawer) and library view options (list, or a 2 to 4 column grid), chosen in Settings
+- A categorized settings hub, app color themes and fonts, and a reading style (font, weight, size, line height, margins, colors) that can be set per book
 - Reader screen (continuous scroll first; paginated later)
 - EPUB features: table of contents, chapter navigation, cover thumbnails, title/author metadata
 - Reader settings (font family, font size, line height, theme, margins, **progress display mode**)
@@ -267,8 +272,9 @@ Install packages when a phase needs them, so each stage stays small and runs in 
 |---|---|---|---|
 | `expo-sqlite` | Phase 2 | Local database | Yes |
 | `expo-crypto` | Phase 2 | UUIDs, SHA-256 content hash | Yes |
-| `expo-file-system`, `expo-document-picker` | Phase 3 | File import and sandbox storage | Yes |
+| `expo-file-system`, `expo-document-picker` | Phase 3 | File import, sandbox storage, and the Android folder scan | Yes |
 | `expo-keep-awake` | Phase 3 | Keep screen on while reading | Yes |
+| `expo-font` | Phase 3 | Bundled reading and app fonts | Yes |
 | `fflate` (or `jszip`) | Phase 3, EPUB | Unzip EPUB archives (pure JS) | Yes |
 | `fast-xml-parser` | Phase 3, EPUB | Parse `container.xml`, OPF, NCX | Yes |
 | `htmlparser2` (or `node-html-parser`) | Phase 3, EPUB | Parse XHTML chapters into text | Yes |
@@ -418,7 +424,7 @@ CREATE TABLE sync_state (
 3. **ISO 8601 UTC strings** consistently, never local time.
 4. **A `device_id`** stored in `sync_state` (generated once). Useful for debugging.
 5. **Keep text content out of SQLite.** Store the original file and the extracted chapter text as files in the app sandbox (`documentDirectory`); keep only metadata and the chapter index in the database. Large blobs in SQLite hurt performance.
-6. **Local-only columns and tables** (`local_uri`, `text_dir`, `cover_uri`, `last_opened_at`, `document_chapters`) are never pushed. The push code must select explicit column lists, not `SELECT *`. Writing a local-only column must not set `dirty` or `updated_at`.
+6. **Local-only columns and tables** (`local_uri`, `text_dir`, `cover_uri`, `last_opened_at`, `document_chapters`) are never pushed. The push code must select explicit column lists, not `SELECT *`. Writing a local-only column must not set `dirty` or `updated_at`. Likewise, settings rows whose key starts with `device.` are device-local: write them with `dirty = 0` so they never push.
 
 ### 4.4 Migrations
 - Keep numbered migrations (`001_init`, `002_formats_and_chapters`, ...). In this project they are TypeScript strings in `src/db/migrations/`, registered in `index.ts`.
@@ -514,6 +520,7 @@ Build and validate all of this **before** adding auth or sync. Test with airplan
 
 - Use `expo-document-picker` to choose files. Accept `.epub`, `.txt`, and `.pdf`. Do not trust MIME types alone, because Android pickers often report odd ones (EPUB is `application/epub+zip`, but may arrive as `application/octet-stream`). Validate by extension **and** content: EPUB is a ZIP (starts with `PK\x03\x04`), PDF starts with `%PDF-`.
 - **Copy the picked file into the app sandbox** (`documentDirectory/books/{documentId}/original.{ext}`) so access does not depend on the original URI, which may be temporary or revoked.
+  - *Android SAF & Content URI Note:* To prevent `ExponentFileSystem.copyAsync` from being rejected with `java.io.IOException` on Android content providers, stage files through a multi-strategy staging helper: try `copyAsync` first, and if rejected, fallback to base64 stream reading/writing (using `readAsStringAsync` / `StorageAccessFramework.readAsStringAsync`). Additionally, SAF directory tree scanning directly uses the child URIs returned by `readDirectoryAsync` rather than string-concatenating URIs.
 - On import:
   1. Read the file bytes (check the current `expo-file-system` docs, since its API has been evolving between legacy and newer interfaces).
   2. Compute the **SHA-256 content hash** with `expo-crypto`. For very large files, measure memory use; if hashing the whole file is too heavy, use a documented partial-hash scheme (size plus sampled blocks), applied identically on every device.
@@ -522,6 +529,11 @@ Build and validate all of this **before** adding auth or sync. Test with airplan
   5. Write each chapter's text to `books/{documentId}/chapters/0000.txt`, `0001.txt`, ... and save the cover if there is one.
   6. In **one SQLite transaction**, insert the `documents` row and the `document_chapters` rows.
 - Run import as a cancellable background task with a progress indicator. Yield to the UI between chapters so large books do not freeze the app. If any step fails, delete the partial `books/{documentId}/` folder and surface a clear error.
+- **Two import methods** (the default is the `device.importMethod` setting, `'scan'` or `'manual'`):
+  - **Manual import:** the document picker above. Works on Android and iOS and needs no permission.
+  - **Device scan (Android only):** ask for storage access, scan for `.epub`, `.txt`, and `.pdf` files, and let the user choose which to add. On Android 11 and later there is generally no blanket "storage permission" that exposes other apps' files (`READ_EXTERNAL_STORAGE` no longer covers them, and "All files access" is restricted by Google Play policy). So "storage access" means the Storage Access Framework folder picker: the user grants one folder (for example Downloads or Documents) and Sirum scans that folder tree. In Expo this is `StorageAccessFramework.requestDirectoryPermissionsAsync()` from `expo-file-system` (check the current docs, since the module is moving between legacy and new APIs). Persist the granted folder URI, handle revoked access, and hide the scan option on iOS, which has no equivalent.
+  - The scan only finds candidates. Each selected file goes through the same import pipeline, and files whose hash already exists are skipped.
+  - Permission state is read from the OS at runtime and is never stored as a setting.
 - Later: "Open with" / share-sheet intents so users can send files to the app.
 
 ### 5.2 EPUB (primary format)
@@ -683,19 +695,53 @@ WHERE d.deleted_at IS NULL
 ORDER BY recency DESC;
 ```
 
+**Navigation layout and view modes**
+
+Reference prototype: `sirum-ui-prototype.html`.
+
+- **Navigation layout** (`device.navMode`): `bottom` shows a bottom tab bar (Library, History, Import, Settings) with format tabs (All, EPUB, TXT, PDF) under the app bar. `side` hides navigation in a drawer opened from the app bar, with the same destinations and the format filters as drawer items.
+- **Default library layout** (`device.libraryLayout`): 2 columns (cover with a title and author caption below) or 3 columns (cover with the title overlaid, progress and format badges, and a continue button). These are only starting layouts.
+- **View options:** the filter/sort sheet lets the user switch between list view and grid view with sizes 2×2, 3×3, and 4×4 (that many columns; rows scroll), saved as `device.viewMode` and `device.gridSize`. Cards use the caption style at 2 columns and the overlay style at 3 and 4. Choosing a default layout resets the view to grid at that size.
+- **Display options:** the user can hide the format and progress badges (`device.showBadges`) and the title and author (`device.showDetails`) for a cleaner, cover-only look. List view always shows the title, since a row without one is not usable. Keep an accessibility label on each cover when the title is hidden.
+
 ### 5.10 Settings
 
+Settings are a hub of categories, each opening its own page (reference: `sirum-ui-prototype.html`):
+
+| Category | Contents |
+|---|---|
+| **Appearance** | Color theme (system, dark, light, sepia), accent color, app font |
+| **Library** | Navigation layout, default library layout, library order, show or hide badges, show or hide title and author |
+| **Reader** | Progress display (whole book or chapter), default reading display (below) |
+| **Import and storage** | Import method, storage access |
+| **Sync** | Google account, sync status, sync now (Phase 5 and 6) |
+| **About** | Version, privacy policy, licenses |
+
+**App appearance (device-local):** theme, accent color, and app font apply to menus and the library. The reading font is separate. Fonts must be bundled with `expo-font` (system fonts plus a few bundled families); letting users add their own font files is a later option.
+
+**Reading display:** font family, font weight, font size, line height, margins, background color, and text color, with presets (Dark, Light, Sepia). These are style only and never change character offsets, so positions, bookmarks, and highlights stay valid.
+- **Default for all books:** stored as one synced setting, `reader.style` (JSON).
+- **Per-book override:** inside a book, the display sheet (Aa) has an "All books / This book only" switch. A book override is stored as a synced setting `reader.book.<documentId>` holding only the changed fields, so no schema change is needed (the key stays under the 100-character limit). The style shown is `{ ...reader.style, ...override }`. "Reset this book" writes an empty object. Purge a book's override row locally when the book is deleted.
+- Changing the default later does not touch fields a book has overridden.
+
 **Reader**
-- Font family (system fonts plus a few bundled ones such as a serif and a monospace)
-- Font size, line height, paragraph spacing, margins
-- Theme: light, dark, sepia, plus follow-system
-- Text alignment (left, justified)
+- **Display:** font family, weight, size, line height, margins, background and text color (default for all books, overridable per book)
+- Paragraph spacing and text alignment (left, justified)
 - **Progress display:** whole book or current chapter (5.8)
 - Keep screen awake while reading (`expo-keep-awake`)
 
 **Library**
 - **Library order:** recently opened first, or fixed order (5.9)
 - Default sort, sort direction, and filters (sort applies in fixed mode; filters apply in both modes)
+
+**Layout**
+- Navigation layout: bottom bar or side drawer
+- Default library layout: 2 or 3 columns (view mode and grid size are also set from the library filter sheet)
+- Show or hide format and progress badges, and title and author
+
+**Import**
+- Import method: scan device or manual import
+- Storage access: shows the current state, with a button to request or revoke it
 
 All settings live in the `settings` table so they sync. Write only values the user actually changed.
 
@@ -706,9 +752,21 @@ All settings live in the `settings` table so they sync. Write only values the us
 | `library.sort` | `'title'`, `'author'`, `'added'`, `'lastRead'`, `'progress'` | Used in fixed mode |
 | `library.sortDirection` | `'asc'`, `'desc'` | Used in fixed mode |
 | `library.filters` | JSON: `{ formats?: [...], status?: [...] }` | Used in both modes |
-| `reader.fontSize`, `reader.lineHeight`, `reader.theme`, ... | per setting | Reader appearance |
+| `device.navMode` | `'bottom'`, `'side'` | Device-local |
+| `device.libraryLayout` | `'cols2'`, `'cols3'` | Device-local |
+| `device.viewMode` | `'grid'`, `'list'` | Device-local |
+| `device.gridSize` | `2`, `3`, `4` | Device-local |
+| `device.importMethod` | `'scan'`, `'manual'` | Device-local |
+| `device.theme` | `'system'`, `'dark'`, `'light'`, `'sepia'` | Device-local |
+| `device.accent` | `'green'`, `'purple'`, `'blue'` | Device-local |
+| `device.appFont` | `'system'`, `'serif'`, `'humanist'`, `'mono'` | Device-local |
+| `device.showBadges`, `device.showDetails` | `true`, `false` | Device-local |
+| `reader.style` | JSON: `{ fam, wt, size, lh, mar, bg, tx }` | Default reading style; replaces separate font and theme keys |
+| `reader.book.<documentId>` | JSON: partial of `reader.style` | Per-book override, changed fields only |
 
 Centralize key names, value types, and in-memory defaults in `src/lib/settingsKeys.ts`.
+
+Keys that start with `device.` are device-local: a phone and a tablet may want different layouts, and scanning does not exist on iOS. Store them in the same table with `dirty = 0` and exclude them from push, so they never sync.
 
 ### 5.11 Bookmarks, highlights, notes
 - Bookmark: store `char_offset`, `chapter_index`, `chapter_char_offset`, and a snippet.
@@ -1097,6 +1155,7 @@ Supabase Realtime (Postgres Changes) can push updates from other devices instant
 - **EPUB extraction:** golden-file tests, where a fixed input EPUB must yield exactly the expected chapter text and offsets. Any change that breaks these requires bumping `normalization_version`.
 - **Determinism:** run extraction twice (and, where possible, on two devices) and assert identical text and chapter offsets.
 - **Library ordering:** recency calculation (latest of `last_opened_at`, `last_read_at`, `created_at`), fixed-mode sorts and filters, status derivation (unread, in progress, finished), and that `touchOpened` sets neither `dirty` nor `updated_at`.
+- **Reading style:** resolution of `reader.style` plus a per-book override, reset, and that a book's override survives a change to the default.
 - Conflict resolution (latest wins, ties, tombstone vs edit)
 - Cursor/pagination logic, including identical timestamps
 - Push "clean only if unchanged" logic
@@ -1119,6 +1178,7 @@ Collect real files covering: EPUB 2 and EPUB 3; nested TOC; no TOC; TOC pointing
 - Token expired while offline, then reconnect.
 - Clock skew on one device (set the system time wrong).
 - Opening a book on a second device without reading must not overwrite the first device's newer position.
+- Folder scan: nested folders, duplicates skipped by hash, permission denied, and access revoked later.
 - Sign out, sign in as a different user.
 
 ### 9.5 Security tests
@@ -1180,6 +1240,8 @@ Collect real files covering: EPUB 2 and EPUB 3; nested TOC; no TOC; TOC pointing
 | Sync clobbers newer data | Server-side latest-wins trigger; tests with two simulated devices |
 | Merely opening a book overwrites a newer position from another device | Write progress only after real movement (5.7); test it (9.4) |
 | Opening a book marks the document dirty (sync churn, metadata overwrites) | `last_opened_at` is local-only; `touchOpened` never sets `dirty` or `updated_at` |
+| Per-book style rows left behind after a book is deleted | Purge `reader.book.<documentId>` locally on delete; the rows are tiny |
+| Expecting a blanket "storage permission" to expose all files on Android | Offer manual import plus a folder-based scan (Storage Access Framework); hide scan on iOS (5.1) |
 | Clock skew breaks last-write-wins | Server-assigned cursor; clamp future timestamps; consider version counters |
 | Cursor skipping rows with identical timestamps | Compound `(timestamp, id)` cursor |
 | Offsets differ between devices (non-deterministic extraction) | Deterministic rules, golden-file tests, versioned `normalization_version`, pinned parsing libraries |
@@ -1217,7 +1279,7 @@ Collect real files covering: EPUB 2 and EPUB 3; nested TOC; no TOC; TOC pointing
 | **M1** | Project scaffold | App runs on a physical device in Expo Go; CI green; Supabase dev project linked and migration applied |
 | **M2** | Local data layer | Migrations (including formats and chapters), repositories, and tests pass |
 | **M3** | Text model and TXT slice | Shared normalization, chunking, and position math with tests; import, read, save, and restore a TXT file in airplane mode |
-| **M4** | **EPUB reader (primary)** | EPUB import (unzip, OPF, TOC, cover, extraction), chapter navigation, library with covers, progress display setting and library order setting (recent vs. fixed, with sort and filters), each with a first-run prompt; golden-file and determinism tests pass; large-book performance acceptable |
+| **M4** | **EPUB reader (primary)** | EPUB import (unzip, OPF, TOC, cover, extraction), chapter navigation, library with covers, navigation layout (bottom bar or side drawer), grid/list view options, manual import and Android folder scan, categorized settings, app themes and fonts, per-book reading style, progress display setting and library order setting (recent vs. fixed, with sort and filters), each with a first-run prompt; golden-file and determinism tests pass; large-book performance acceptable |
 | **M5** | PDF and annotations | Text-based PDF import via pdf.js; bookmarks, highlights, and notes working across all formats |
 | **M6** | Backend | Postgres schema, RLS, triggers, migrations; cross-user access test passes |
 | **M7** | Google sign-in | EAS development build installed; sign in/out works on both platforms; session persists; optional-auth flows done |

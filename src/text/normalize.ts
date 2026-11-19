@@ -20,7 +20,6 @@ export function normalizeText(raw: string): string {
 
   // Remove control characters except \n (U+000A) and \t (U+0009)
   // Control chars are U+0000–U+001F and U+007F–U+009F
-  // eslint-disable-next-line no-control-regex
   text = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '');
 
   // Strip leading/trailing \n from the result

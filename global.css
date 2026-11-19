@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Theme tokens are CSS variables consumed by Tailwind color utilities.
+ * The actual values are injected at runtime by ThemeProvider (see
+ * src/theme/) via NativeWind's vars(), so a single className like
+ * `bg-bg` / `text-tx` / `bg-accent` follows the active theme
+ * (system / dark / light / sepia) and accent color.
+ *
+ * Colors are stored as "R G B" triples so opacity modifiers
+ * (e.g. `bg-surface/80`) keep working.
+ */
+:root {
+  --bg: 0 0 0;
+  --sf: 28 28 30;
+  --sf2: 44 44 48;
+  --tx: 242 242 242;
+  --mu: 154 154 162;
+  --ln: 51 51 51;
+  --ac: 82 201 139;
+  --acb: 14 107 58;
+  --ac-soft: 190 234 207;
+  --font-ui: System;
+}

@@ -13,7 +13,7 @@ export const chapters = {
   async list(documentId: string): Promise<ChapterRow[]> {
     const db = await getDb();
     return db.getAllAsync<ChapterRow>(
-      'SELECT * FROM chapters WHERE document_id = ? ORDER BY chapter_index ASC',
+      'SELECT * FROM document_chapters WHERE document_id = ? ORDER BY chapter_index ASC',
       [documentId]
     );
   },
@@ -25,11 +25,11 @@ export const chapters = {
   ): Promise<void> {
     const db = await getDb();
     await db.withTransactionAsync(async () => {
-      await db.runAsync('DELETE FROM chapters WHERE document_id = ?', [documentId]);
+      await db.runAsync('DELETE FROM document_chapters WHERE document_id = ?', [documentId]);
 
       for (const row of rows) {
         await db.runAsync(
-          `INSERT INTO chapters (document_id, chapter_index, title, source_href, start_offset, char_count)
+          `INSERT INTO document_chapters (document_id, chapter_index, title, source_href, start_offset, char_count)
            VALUES (?, ?, ?, ?, ?, ?)`,
           [
             documentId,
