@@ -31,6 +31,9 @@ const WEIGHTS: readonly (readonly [400 | 500 | 700, string])[] = [
   [700, 'Bold'],
 ];
 
+/** Base reading font size in pt; `style.size` is a percentage of this. */
+export const BASE_FONT_SIZE = 17;
+
 /** RN fontFamily for a reading-style family choice. */
 export function readingFontFamily(fam: ReadingStyle['fam']): string {
   return fam === 'serif' ? 'serif' : fam === 'mono' ? 'monospace' : 'sans-serif';
@@ -75,11 +78,12 @@ export function ReadingStyleEditor({
       />
 
       <SliderRow
-        label="Size"
+        label="Text size"
         value={value.size}
-        min={14}
-        max={28}
-        step={1}
+        display={`${value.size}%`}
+        min={60}
+        max={200}
+        step={10}
         onChange={(size) => onChange({ size })}
       />
       <SliderRow
@@ -92,12 +96,32 @@ export function ReadingStyleEditor({
         onChange={(lh) => onChange({ lh })}
       />
       <SliderRow
-        label="Margins"
+        label="Margin"
         value={value.mar}
+        display={`${value.mar}%`}
         min={0}
-        max={48}
-        step={2}
+        max={10}
+        step={1}
         onChange={(mar) => onChange({ mar })}
+      />
+      <SectionLabel>Flow</SectionLabel>
+      <SegmentedControl
+        options={[
+          ['auto', 'Auto'],
+          ['paged', 'Paged'],
+          ['scrolled', 'Scrolled'],
+        ]}
+        value={value.flow}
+        onChange={(flow) => onChange({ flow })}
+      />
+      <SectionLabel>Text align</SectionLabel>
+      <SegmentedControl
+        options={[
+          ['left', 'Left'],
+          ['justify', 'Justify'],
+        ]}
+        value={value.align}
+        onChange={(align) => onChange({ align })}
       />
       <ColorSwatches
         label="Background color"
@@ -126,8 +150,11 @@ export function StylePreview({ style }: { style: ReadingStyle }) {
           color: style.tx,
           fontFamily: readingFontFamily(style.fam),
           fontWeight: String(style.wt) as '400' | '500' | '700',
-          fontSize: style.size,
-          lineHeight: Math.round(style.size * style.lh),
+          fontSize: BASE_FONT_SIZE * (style.size / 100),
+          lineHeight: Math.round(
+            BASE_FONT_SIZE * (style.size / 100) * style.lh
+          ),
+          textAlign: style.align === 'justify' ? 'justify' : 'left',
         }}>
         The lamp on the quay had been lit for an hour before anyone noticed the boat was
         gone.{'\n\n'}“It didn’t drift,” she said. “Somebody took it, and they wanted us to

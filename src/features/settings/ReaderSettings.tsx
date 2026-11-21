@@ -1,8 +1,8 @@
 import React from 'react';
 
-import { Section, SegmentedControl } from '@/components/ui/controls';
+import { Section, SegmentedControl, SliderRow } from '@/components/ui/controls';
 import { ReadingStyleEditor, StylePreview } from '@/features/reader/ReadingStyleEditor';
-import { DEFAULT_READING_STYLE, SettingKeys } from '@/lib/settingsKeys';
+import { DEFAULT_READING_STYLE, normalizeStylePatch, SettingKeys } from '@/lib/settingsKeys';
 import { useSettings } from './SettingsProvider';
 import { SettingsPage } from './SettingsPage';
 
@@ -10,7 +10,9 @@ export default function ReaderSettings() {
   const { get, getJson, set, setJson } = useSettings();
   const style = {
     ...DEFAULT_READING_STYLE,
-    ...(getJson<Partial<typeof DEFAULT_READING_STYLE>>(SettingKeys.readerStyle) ?? {}),
+    ...(normalizeStylePatch(
+      getJson<Partial<typeof DEFAULT_READING_STYLE>>(SettingKeys.readerStyle)
+    ) ?? {}),
   };
 
   return (
@@ -35,6 +37,19 @@ export default function ReaderSettings() {
           onChange={(patch) => setJson(SettingKeys.readerStyle, { ...style, ...patch })}
         />
         <StylePreview style={style} />
+      </Section>
+      <Section
+        title="Brightness"
+        description="Reader screen brightness. The system value is restored when you leave a book.">
+        <SliderRow
+          label="Brightness"
+          value={get(SettingKeys.deviceReaderBrightness)}
+          display={`${get(SettingKeys.deviceReaderBrightness)}%`}
+          min={20}
+          max={100}
+          step={5}
+          onChange={(v) => set(SettingKeys.deviceReaderBrightness, v)}
+        />
       </Section>
     </SettingsPage>
   );

@@ -72,6 +72,18 @@ export default function LibrarySettings() {
           onChange={(v) => set(SettingKeys.deviceShowDetails, v)}
         />
       </Section>
+      <Section
+        title="Cover fit"
+        description="Show the whole cover, or always fill the frame (may crop wide or square art).">
+        <SegmentedControl
+          options={[
+            ['full', 'Show full cover'],
+            ['crop', 'Fill frame'],
+          ]}
+          value={get(SettingKeys.deviceCoverFit)}
+          onChange={(v) => set(SettingKeys.deviceCoverFit, v)}
+        />
+      </Section>
     </SettingsPage>
   );
 }

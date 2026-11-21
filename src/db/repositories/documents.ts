@@ -9,6 +9,8 @@ export interface DocumentRow {
   local_uri: string | null;
   text_dir: string | null;
   cover_uri: string | null;
+  cover_width: number | null;   // LOCAL ONLY (migration 003)
+  cover_height: number | null;  // LOCAL ONLY
   content_hash: string;
   size_bytes: number | null;
   encoding: string | null;
@@ -142,11 +144,12 @@ export const documents = {
     const now = new Date().toISOString();
     await db.runAsync(
       `INSERT INTO documents (
-        id, format, title, author, local_uri, text_dir, cover_uri, content_hash,
+        id, format, title, author, local_uri, text_dir, cover_uri, cover_width,
+        cover_height, content_hash,
         size_bytes, encoding, normalization_version, chapter_count, char_count,
         storage_path, last_opened_at, created_at, updated_at, deleted_at,
         dirty, server_updated_at, sync_error
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, NULL, NULL)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, NULL, NULL)`,
       [
         input.id,
         input.format,
@@ -155,6 +158,8 @@ export const documents = {
         input.local_uri ?? null,
         input.text_dir ?? null,
         input.cover_uri ?? null,
+        input.cover_width ?? null,
+        input.cover_height ?? null,
         input.content_hash,
         input.size_bytes ?? null,
         input.encoding ?? null,

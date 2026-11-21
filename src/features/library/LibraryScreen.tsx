@@ -9,6 +9,7 @@ import { Chip, SectionLabel, SegmentedControl } from '@/components/ui/controls';
 import { BottomSheet } from '@/components/ui/sheet';
 import { documents, type LibraryDocument } from '@/db/repositories/documents';
 import { useSettings } from '@/features/settings/SettingsProvider';
+import { useAppTheme } from '@/theme/ThemeProvider';
 import {
   SettingKeys,
   type DocumentFormat,
@@ -34,6 +35,7 @@ export default function LibraryScreen() {
   const params = useLocalSearchParams<{ tab?: string }>();
   const { get, set, has } = useSettings();
   const { toast, openDrawer } = useChrome();
+  const { isDark, accent } = useAppTheme();
 
   const navMode = get(SettingKeys.deviceNavMode);
   const viewMode = get(SettingKeys.deviceViewMode);
@@ -52,6 +54,8 @@ export default function LibraryScreen() {
   const [books, setBooks] = useState<LibraryDocument[]>([]);
   const [formatCounts, setFormatCounts] = useState<Record<string, number>>({});
   const [orderPrompt, setOrderPrompt] = useState(false);
+  const [orderPromptDismissed, setOrderPromptDismissed] = useState(false);
+  const [alwaysUseChoice, setAlwaysUseChoice] = useState(true);
 
   // Deep link from the side drawer: /?tab=epub
   const [tabParam, setTabParam] = useState(params.tab);
@@ -89,10 +93,10 @@ export default function LibraryScreen() {
     setFormatCounts(counts);
 
     // Ask-once library order prompt (plan 5.9): two or more books, no stored choice.
-    if (all.length >= 2 && !has(SettingKeys.libraryOrderMode)) {
+    if (all.length >= 2 && !has(SettingKeys.libraryOrderMode) && !orderPromptDismissed) {
       setOrderPrompt(true);
     }
-  }, [tab, search, orderMode, sort, sortDirection, filters, has]);
+  }, [tab, search, orderMode, sort, sortDirection, filters, has, orderPromptDismissed]);
 
   useFocusEffect(
     useCallback(() => {
@@ -110,6 +114,18 @@ export default function LibraryScreen() {
       router.push(`/reader/${book.id}` as never);
     },
     [router, toast]
+  );
+
+  const chooseOrder = useCallback(
+    async (mode: 'recent' | 'fixed') => {
+      setOrderPrompt(false);
+      setOrderPromptDismissed(true);
+      if (alwaysUseChoice) {
+        await set(SettingKeys.libraryOrderMode, mode);
+      }
+      load();
+    },
+    [alwaysUseChoice, set, load]
   );
 
   const header = findOpen ? (
@@ -222,7 +238,7 @@ export default function LibraryScreen() {
           key={`grid-${gridSize}`}
           keyExtractor={(b) => b.id}
           numColumns={gridSize}
-          columnWrapperStyle={gridSize > 1 ? { gap: 14 } : undefined}
+          columnWrapperStyle={gridSize > 1 ? { gap: 12 } : undefined}
           contentContainerStyle={styles.gridContent}
           renderItem={({ item }) => (
             <View style={{ flex: 1 }}>
@@ -248,31 +264,85 @@ export default function LibraryScreen() {
       />
 
       {/* Ask-once: library order (plan 5.9) */}
-      <Modal visible={orderPrompt} transparent animationType="fade" onRequestClose={() => setOrderPrompt(false)}>
+      <Modal
+        visible={orderPrompt && !orderPromptDismissed}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setOrderPrompt(false);
+          setOrderPromptDismissed(true);
+        }}>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            <Text style={styles.modalTitle}>How should your library be ordered?</Text>
-            <Text style={styles.modalBody}>
-              Move the book you open to the top (Recent), or keep a fixed order using your chosen sort and filters.
-              You can adjust this anytime in Settings → Library.
+          <View
+            style={[
+              styles.modalBox,
+              {
+                backgroundColor: isDark ? '#1d1d22' : '#ffffff',
+                borderColor: isDark ? '#32323c' : '#e4e4ec',
+              },
+            ]}>
+            <View style={styles.modalHeaderRow}>
+              <View style={[styles.modalIconBox, { backgroundColor: isDark ? '#2a2a34' : '#eef2ff' }]}>
+                <Icon name="swap-vertical" size={20} tone={accent.hex} />
+              </View>
+              <Text style={[styles.modalTitle, { color: isDark ? '#ffffff' : '#18181b' }]}>
+                Library Order
+              </Text>
+            </View>
+
+            <Text style={[styles.modalBody, { color: isDark ? '#a0a0ab' : '#555562' }]}>
+              Choose how you want your books arranged:
             </Text>
+
+            <View style={styles.modalOptionsContainer}>
+              <Text style={[styles.modalOptionDesc, { color: isDark ? '#92929e' : '#5e5e68' }]}>
+                • <Text style={{ fontWeight: '700', color: isDark ? '#f0f0f5' : '#1a1a20' }}>Recent first:</Text> Opening a book moves it to the top.
+              </Text>
+              <Text style={[styles.modalOptionDesc, { color: isDark ? '#92929e' : '#5e5e68' }]}>
+                • <Text style={{ fontWeight: '700', color: isDark ? '#f0f0f5' : '#1a1a20' }}>Keep my order:</Text> Preserves your sort & filter order without rearranging.
+              </Text>
+            </View>
+
+            {/* Always use this choice toggle */}
+            <Pressable
+              onPress={() => setAlwaysUseChoice((v) => !v)}
+              style={styles.alwaysUseRow}>
+              <View
+                style={[
+                  styles.checkboxBox,
+                  {
+                    borderColor: alwaysUseChoice ? accent.hex : isDark ? '#484856' : '#bbbbc6',
+                    backgroundColor: alwaysUseChoice ? accent.hex : 'transparent',
+                  },
+                ]}>
+                {alwaysUseChoice && <Icon name="checkmark" size={13} tone="#ffffff" />}
+              </View>
+              <Text style={[styles.alwaysUseText, { color: isDark ? '#e4e4eb' : '#222226' }]}>
+                Always use this choice
+              </Text>
+            </Pressable>
+
+            <Text style={[styles.modalNote, { color: isDark ? '#70707c' : '#888894' }]}>
+              Note: You can change this choice anytime in Settings → Library.
+            </Text>
+
             <View style={styles.modalActions}>
               <Pressable
-                style={styles.modalGhostButton}
-                onPress={async () => {
-                  await set(SettingKeys.libraryOrderMode, 'fixed');
-                  setOrderPrompt(false);
-                  load();
-                }}>
-                <Text style={styles.modalGhostButtonText}>Keep my order</Text>
+                style={[
+                  styles.modalGhostButton,
+                  {
+                    backgroundColor: isDark ? '#282830' : '#f0f0f4',
+                    borderColor: isDark ? '#383844' : '#dcdce2',
+                  },
+                ]}
+                onPress={() => chooseOrder('fixed')}>
+                <Text style={[styles.modalGhostButtonText, { color: isDark ? '#ffffff' : '#18181b' }]}>
+                  Keep my order
+                </Text>
               </Pressable>
               <Pressable
-                style={styles.modalPrimaryButton}
-                onPress={async () => {
-                  await set(SettingKeys.libraryOrderMode, 'recent');
-                  setOrderPrompt(false);
-                  load();
-                }}>
+                style={[styles.modalPrimaryButton, { backgroundColor: accent.hex }]}
+                onPress={() => chooseOrder('recent')}>
                 <Text style={styles.modalPrimaryButtonText}>Recent first</Text>
               </Pressable>
             </View>
@@ -473,9 +543,9 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
   gridContent: {
-    padding: 16,
+    padding: 12,
     paddingBottom: 32,
-    gap: 16,
+    gap: 12,
   },
   listContent: {
     padding: 16,
@@ -547,52 +617,94 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: 'rgba(0,0,0,0.72)',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
   },
   modalBox: {
-    backgroundColor: 'rgb(var(--surface))',
-    borderRadius: 20,
+    borderRadius: 24,
     padding: 22,
     width: '100%',
     maxWidth: 340,
+    borderWidth: 1,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.45,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+  modalHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  modalIconBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   modalTitle: {
-    fontSize: 17,
+    fontSize: 18,
     fontWeight: '700',
-    color: 'rgb(var(--tx))',
+    flex: 1,
   },
   modalBody: {
     fontSize: 14,
-    color: 'rgb(var(--mu))',
     lineHeight: 20,
+    marginTop: 12,
+  },
+  modalOptionsContainer: {
+    marginTop: 10,
+    gap: 6,
+  },
+  modalOptionDesc: {
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  alwaysUseRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 16,
+    paddingVertical: 4,
+  },
+  checkboxBox: {
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  alwaysUseText: {
+    fontSize: 13.5,
+    fontWeight: '600',
+  },
+  modalNote: {
+    fontSize: 12,
+    lineHeight: 16,
     marginTop: 8,
   },
   modalActions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    gap: 8,
-    marginTop: 18,
+    gap: 10,
+    marginTop: 20,
   },
   modalGhostButton: {
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 20,
+    borderWidth: 1,
   },
   modalGhostButtonText: {
-    color: 'rgb(var(--ac))',
     fontWeight: '600',
-    fontSize: 14,
+    fontSize: 13.5,
   },
   modalPrimaryButton: {
-    backgroundColor: 'rgb(var(--ac))',
     paddingHorizontal: 18,
     paddingVertical: 10,
     borderRadius: 20,
@@ -600,6 +712,6 @@ const styles = StyleSheet.create({
   modalPrimaryButtonText: {
     color: '#ffffff',
     fontWeight: '600',
-    fontSize: 14,
+    fontSize: 13.5,
   },
 });

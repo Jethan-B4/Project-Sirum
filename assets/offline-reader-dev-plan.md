@@ -23,6 +23,19 @@
 | 9 | **Layouts and views** | Two navigation layouts, a **bottom bar** or a **hidden side drawer**, and a default library layout of **2 or 3 columns**. The library filter sheet also offers list view or grid view from 2×2 to 4×4. Reference: `sirum-ui-prototype.html` |
 | 10 | **Import methods** | **Manual import** (file picker) and **device scan** (Android only, through a folder the user grants access to). A setting chooses the default method. |
 | 11 | **Settings and display** | A categorized settings hub (Appearance, Library, Reader, Import and storage, Sync, About). App color theme, accent color, and app font are device-local. The reading style (font family, weight, size, line height, margins, background and text color) has a synced default plus optional **per-book overrides**. The library can hide format/progress badges and title/author. |
+| 12 | **Reader screen** | Layout, contents/annotations/bookmarks panel, display popup (flow, brightness, theme, text size, align, margin), and in-book search follow `sirum-reader-prototype.html` (5.6.1) |
+| 13 | **Covers** | Covers are normalized at import and always shown in full, never cropped or stretched (5.2.1) |
+
+---
+
+## Current Status (2026-11-19)
+
+Implementation tracking lives in `development-progress.md`. Compared with this plan, the project is further along in Phase 3 and has some differences:
+
+- **Built and working:** TXT and EPUB import and reading, library (grid/list, filters, order modes), history, import (manual picker and Android folder scan), the categorized settings hub, app themes and fonts, per-book reading style, ask-once prompts, progress save and restore, and the reader screen with the Aa sheet.
+- **Differences from the plan:** styling uses NativeWind v4 with CSS-variable theme tokens; routes live in `src/app/`, shared UI in `src/components/`, theming in `src/theme/`, and settings in `src/features/settings/` (see 3.2). Import stages files through a multi-strategy helper (5.1).
+- **Not built yet:** PDF import (reported unsupported), bookmarks/highlights/notes UI, contents panel, in-book search, chunked rendering (the reader currently renders each chapter in one `ScrollView`), reactive repository reads, unit tests, Google sign-in, and sync. The Supabase SQL is written but not verified against the live project.
+- **Open issues driving this revision:** cover images shown at the wrong size or aspect ratio (5.2.1), folder scan and import missing some EPUB files (5.1.1), and the reader screen features in 5.6.1.
 
 ---
 
@@ -67,7 +80,7 @@
 - Library screen (list with cover, search, sort, filter, delete) with a user-chosen ordering mode: recently opened first, or fixed order
 - Two navigation layouts (bottom bar or hidden side drawer) and library view options (list, or a 2 to 4 column grid), chosen in Settings
 - A categorized settings hub, app color themes and fonts, and a reading style (font, weight, size, line height, margins, colors) that can be set per book
-- Reader screen (continuous scroll first; paginated later)
+- Reader screen (continuous scroll first; paginated later), with a contents panel, bookmarks, and in-book search
 - EPUB features: table of contents, chapter navigation, cover thumbnails, title/author metadata
 - Reader settings (font family, font size, line height, theme, margins, **progress display mode**)
 - Reading progress saved automatically and synced
@@ -234,6 +247,8 @@ This is the central design of the reader. Every format is converted to **normali
   config.toml
 ```
 
+**As built (2026-11-19):** routes are in `src/app/` (`index`, `history`, `import`, `settings`, `settings-*`, `reader/[id]`), shared UI in `src/components/{chrome,ui}`, theme tokens in `src/theme/`, settings in `src/features/settings/`, and NativeWind config files at the project root.
+
 **Rule:** screens import from `features/` and `db/repositories`. Only `sync/` and `auth/` import the Supabase client. Only `formats/` knows about EPUB, PDF, or TXT internals.
 
 ### 3.3 Tooling
@@ -241,6 +256,7 @@ This is the central design of the reader. Every format is converted to **normali
 - **ESLint and Prettier** (use Expo's lint config as a base).
 - **Environment variables:** use `EXPO_PUBLIC_` prefixed vars for the Supabase URL and anon key. These are public by design. **Never put the service role key in the app.**
 - **State management:** keep it light. React Context for auth/session; a query library (TanStack Query) or simple hooks over repositories for DB reads; Zustand for small UI state if needed.
+- **Styling:** NativeWind v4 (Tailwind classes) with CSS-variable theme tokens injected by `ThemeProvider`. The local gate is `npx tsc --noEmit` plus `npx eslint` (flat config).
 - **Git:** `.gitignore` for `.env*`, `/android`, `/ios` (generated native folders), and credentials files.
 - **CI:** run typecheck, lint, and unit tests on each pull request.
 
@@ -275,6 +291,9 @@ Install packages when a phase needs them, so each stage stays small and runs in 
 | `expo-file-system`, `expo-document-picker` | Phase 3 | File import, sandbox storage, and the Android folder scan | Yes |
 | `expo-keep-awake` | Phase 3 | Keep screen on while reading | Yes |
 | `expo-font` | Phase 3 | Bundled reading and app fonts | Yes |
+| `nativewind` | Phase 3 (installed) | Styling | Yes |
+| `expo-image`, `expo-image-manipulator` | Phase 3 (recommended) | Cover decoding, normalizing, and display (5.2.1) | Yes |
+| `expo-brightness` | Phase 3 (recommended) | Reader brightness (5.6.1); verify behavior in Expo Go | Yes |
 | `fflate` (or `jszip`) | Phase 3, EPUB | Unzip EPUB archives (pure JS) | Yes |
 | `fast-xml-parser` | Phase 3, EPUB | Parse `container.xml`, OPF, NCX | Yes |
 | `htmlparser2` (or `node-html-parser`) | Phase 3, EPUB | Parse XHTML chapters into text | Yes |
@@ -508,6 +527,30 @@ alter table public.highlights
 
 `document_chapters` and `last_opened_at` have no server counterpart, because they are local-only. The library order setting needs no schema change on the server: the existing `settings` table stores the new keys.
 
+### 4.8 Schema changes for covers and import diagnostics
+
+Local-only, so nothing is pushed and no Supabase migration is needed. Add as a new local migration (`003_covers_and_import_log`):
+
+```sql
+ALTER TABLE documents ADD COLUMN cover_width INTEGER;    -- LOCAL ONLY
+ALTER TABLE documents ADD COLUMN cover_height INTEGER;   -- LOCAL ONLY
+
+-- One row per file per import run; prune to the latest ~200 rows.
+CREATE TABLE import_log (
+  id TEXT PRIMARY KEY NOT NULL,
+  file_name TEXT NOT NULL,
+  source_uri TEXT,
+  status TEXT NOT NULL CHECK (status IN ('imported','duplicate','skipped','failed')),
+  reason TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_import_log_created ON import_log (created_at);
+```
+
+The extended `reader.style` fields (5.6.1) are JSON inside an existing settings row, so they need no migration.
+
+> **Convention for future migrations:** every change gets a numbered local migration in `src/db/migrations/` first. A matching file under `supabase/migrations/` is created **only** when the change touches synced tables/columns (`documents`, `reading_progress`, `bookmarks`, `highlights`, `settings` rows that should sync). Local-only columns (`text_dir`, `cover_uri`, `cover_width`, `cover_height`, `last_opened_at`), local-only tables (`document_chapters`, `import_log`), `device.*` settings (written with `dirty = 0`), and JSON blobs inside existing settings rows normally get **no** Supabase counterpart — sync pushes use explicit column lists, so they would never be sent anyway. Exception: `20261119000001_covers_and_import_log.sql` creates the server-side `cover_width`/`cover_height` columns and `import_log` table anyway, keeping the server schema a superset of the local one for future use; they remain unused until a sync feature adopts them. When in doubt, check whether the sync push column list would include the field.
+
 ---
 
 ## 5. Phase 3: Core Reading Features (Fully Offline)
@@ -535,6 +578,23 @@ Build and validate all of this **before** adding auth or sync. Test with airplan
   - The scan only finds candidates. Each selected file goes through the same import pipeline, and files whose hash already exists are skipped.
   - Permission state is read from the OS at runtime and is never stored as a setting.
 - Later: "Open with" / share-sheet intents so users can send files to the app.
+
+### 5.1.1 Scan and import reliability (all formats)
+
+**Symptom:** the folder scan and the picker import only some `.epub` files. Work through these causes, most likely first, and make every file's outcome visible instead of silently skipping it.
+
+1. **Name and type matching.** Match the decoded file name with a case-insensitive extension test (`/\.epub$/i`, also `.txt` and `.pdf`), not the MIME type or the raw content URI. SAF URIs percent-encode `/` as `%2F`, so take the last decoded path segment. Providers report `application/epub+zip`, `application/octet-stream`, `application/x-zip`, or nothing, so accept all of them and validate by content (ZIP signature `PK\x03\x04`, then `META-INF/container.xml`).
+2. **Directory traversal.** Recurse every child returned by `readDirectoryAsync`, including nested folders and folders with many entries. Do not cap depth or count silently, keep a visited set, and treat a folder that fails to read as a per-folder error rather than aborting the scan.
+3. **Staging.** Keep the multi-strategy `stageFile` (copy, then chunked read/write). Stream large files in chunks, measure peak memory, and delete partial copies on failure.
+4. **Parser strictness.** Make the EPUB importer tolerant of: a missing or misordered `mimetype`; ZIP64 and data-descriptor archives; spaces, backslashes, or percent-encoding in paths in `container.xml`, the OPF, and manifest hrefs; an OPF in a subfolder; several `rootfile` entries (pick `application/oebps-package+xml`); a spine `idref` missing from the manifest (skip that item, do not fail); spines that are all `linear="no"`; XML with a BOM or a non-UTF-8 declaration; a missing nav or NCX (fall back to heading text); and XHTML namespaces and entities. If no chapter has text, report "No readable text (image-only or fixed layout)" instead of a generic failure.
+5. **DRM detection.** An `encryption.xml` that lists only font obfuscation (`http://www.idpf.org/2008/embedding`, `http://ns.adobe.com/pdf/enc#RC`) is not DRM. Block a book only when content documents are encrypted.
+6. **Memory.** Unzipping the whole archive at once loads everything. Use fflate's filtered or streaming unzip, read only the entries needed (skip large images other than the cover), and extract chapter by chapter.
+7. **Duplicates.** Compare the hash only against non-deleted rows and report "Already in your library" with an option to open it, so a skipped duplicate is not mistaken for a missed file.
+8. **Silent catch blocks.** Every catch writes an `import_log` row (4.8) with the reason.
+
+**Diagnostics first.** Produce an `ImportReport` for each run (scan or picker): counts for found, imported, duplicate, skipped, and failed, plus a per-file reason list shown on the Import screen (for example "12 found, 9 imported, 2 duplicates, 1 failed: Atlas.epub, no OPF"). Add "Retry failed" and "Copy report" actions. In development builds, log the number of entries returned for each folder so a missing or truncated listing is visible.
+
+**Acceptance test:** a folder with at least 30 EPUBs covering the corpus in 9.2 (uppercase `.EPUB`, spaces, non-ASCII and `%` in names, nested folders, one 50 MB file) imports every valid file, and every rejected file shows a reason.
 
 ### 5.2 EPUB (primary format)
 
@@ -578,6 +638,18 @@ documentDirectory/books/{documentId}/
   chapters/0001.txt
   cover.jpg
 ```
+
+### 5.2.1 Cover images (show the full cover at the right aspect ratio)
+
+**Symptom:** covers load but are drawn at the wrong size or aspect ratio. **Check first:** the image is stretched into a fixed box; the frame ratio differs from the image ratio and `cover` crops it; bytes are saved as `cover.jpg` whatever their real type (PNG, GIF, WebP, or SVG, which React Native `Image` cannot draw); the "cover" found is a banner or title page; or huge originals are scaled by the card.
+
+1. **Pick the right image.** In order: EPUB 3 `cover-image` property; EPUB 2 `<meta name="cover">` (the value is a manifest id, so resolve it through the manifest rather than treating it as a path); a manifest image whose id or href contains "cover"; the `guide` reference of type `cover`; the first image of the first spine page (if that page is an SVG wrapper, use its `<image>` href). Skip SVG and fall back to the generated cover.
+2. **Normalize once at import.** Detect the type from magic bytes (never the extension), decode it, read the intrinsic width and height, downscale so the long edge is at most 1200 px, re-encode as JPEG (PNG if it has transparency) with `expo-image-manipulator`, save with the correct extension, and store `cover_width` and `cover_height` (4.8).
+3. **Show the whole image.** Library frames are 2:3 and sized from the card width (`aspectRatio: 2/3`), never from the image's pixel size. If the cover's ratio is within about 8% of 2:3, fill the frame (`contentFit="cover"`). Otherwise (square art, wide banners, logos) use `contentFit="contain"`, centered over a blurred, dimmed copy of the same image, so all of the artwork is visible with no cropping or stretching. A device-local setting `device.coverFit` (`'full'` by default, or `'crop'`) lets users always crop-fill instead.
+4. **Use `expo-image`** for caching and `contentFit`, with the generated gradient cover as the fallback when no usable image exists.
+5. **Rows and history** use the same cover component (small 2:3 frame, same rule).
+
+**Tests:** portrait, square, wide banner, tiny (64 px), very large, PNG, WebP, GIF, SVG, and missing covers. Each renders uncropped, unstretched, and without layout jumps.
 
 ### 5.3 TXT
 
@@ -627,6 +699,22 @@ Rendering a whole chapter, let alone a whole book, as one `<Text>` will freeze o
 - Hard-wrap chunks that exceed a maximum length (for example, a single-line file).
 - **Chapter navigation:** a table-of-contents drawer built from the TOC tree, previous/next chapter controls, and a heading for each chapter in the scroll.
 - Render chapter headings and chunks with the reader theme settings; apply highlights by splitting chunk text into styled spans.
+
+### 5.6.1 Reader screen layout and features
+
+Reference prototype: `sirum-reader-prototype.html`. Chunked virtualized rendering (above) is a priority, because the current reader renders each chapter in a single `ScrollView`.
+
+- **Top bar:** back, book title, in-book search, display (Aa), and an overflow menu with **Add bookmark**, **Contents**, and **Settings**.
+- **Bottom bar:** current chapter title, a percentage, and a scrubber. The percentage and scrubber follow `reader.percentageMode` (5.8).
+- **Contents panel** (opens from the right, three tabs): **Contents** (chapter list from `document_chapters`, current chapter highlighted, tap to jump), **Annotations** (highlights and notes), and **Bookmarks** (chapter and percent, tap to jump).
+- **Display popup** (from Aa):
+  - **Flow:** Auto, Paged, or Scrolled. Scrolled is v1. Paged paginates lazily around the current position, with tap zones on the left and right thirds. Auto picks paged on wide screens and scrolled on phones.
+  - **Brightness:** `expo-brightness` or a dimming overlay, stored as `device.readerBrightness`; restore the system value on exit.
+  - **Theme:** swatches (white, dark gray, black, sepia) plus custom background and text colors.
+  - **Text size** (percent), **text align** (left or justify), and **margin** (percent of width), each with minus and plus controls.
+  - These write `reader.style`, or the per-book override when "This book only" is chosen. Add that switch to the popup (the prototype omits it). `reader.style` gains `flow` and `align`, and `size` and `mar` become percentages instead of pixels.
+- **In-book search:** the search icon opens a full-screen search. An empty query lists recent searches (device-local `device.searchHistory`, last 10, with a clear action). Typing shows live results (chapter title and a snippet with the match highlighted), and tapping a result jumps to that chapter and offset. Scan the normalized chapter files one at a time, yielding between chapters, with a result cap (for example 200). Add an FTS index only if scanning is too slow. Voice input is out of scope for v1.
+- **Bookmarks:** add from the menu; store `char_offset`, `chapter_index`, `chapter_char_offset`, and a short snippet (5.11).
 
 ### 5.7 Saving progress locally
 
@@ -761,7 +849,10 @@ All settings live in the `settings` table so they sync. Write only values the us
 | `device.accent` | `'green'`, `'purple'`, `'blue'` | Device-local |
 | `device.appFont` | `'system'`, `'serif'`, `'humanist'`, `'mono'` | Device-local |
 | `device.showBadges`, `device.showDetails` | `true`, `false` | Device-local |
-| `reader.style` | JSON: `{ fam, wt, size, lh, mar, bg, tx }` | Default reading style; replaces separate font and theme keys |
+| `device.coverFit` | `'full'`, `'crop'` | Device-local (5.2.1) |
+| `device.searchHistory` | JSON array of up to 10 strings | Device-local (5.6.1) |
+| `device.readerBrightness` | number 20 to 100 | Device-local (5.6.1) |
+| `reader.style` | JSON: `{ fam, wt, size, lh, mar, bg, tx, flow, align }` | Default reading style. `size` and `mar` are percentages. Replaces separate font and theme keys |
 | `reader.book.<documentId>` | JSON: partial of `reader.style` | Per-book override, changed fields only |
 
 Centralize key names, value types, and in-memory defaults in `src/lib/settingsKeys.ts`.
@@ -1155,6 +1246,8 @@ Supabase Realtime (Postgres Changes) can push updates from other devices instant
 - **EPUB extraction:** golden-file tests, where a fixed input EPUB must yield exactly the expected chapter text and offsets. Any change that breaks these requires bumping `normalization_version`.
 - **Determinism:** run extraction twice (and, where possible, on two devices) and assert identical text and chapter offsets.
 - **Library ordering:** recency calculation (latest of `last_opened_at`, `last_read_at`, `created_at`), fixed-mode sorts and filters, status derivation (unread, in progress, finished), and that `touchOpened` sets neither `dirty` nor `updated_at`.
+- **Covers:** cover selection order, type detection by magic bytes, and fit rules for portrait, square, banner, and tiny images (5.2.1).
+- **In-book search:** matching, snippet building, result cap, and history limits (5.6.1).
 - **Reading style:** resolution of `reader.style` plus a per-book override, reset, and that a book's override survives a change to the default.
 - Conflict resolution (latest wins, ties, tombstone vs edit)
 - Cursor/pagination logic, including identical timestamps
@@ -1162,7 +1255,7 @@ Supabase Realtime (Postgres Changes) can push updates from other devices instant
 - Migration runner (fresh install and upgrade from each previous version)
 
 ### 9.2 EPUB test corpus
-Collect real files covering: EPUB 2 and EPUB 3; nested TOC; no TOC; TOC pointing to fragments; one huge spine file; hundreds of tiny spine files; image-only cover page; non-linear spine items; non-UTF-8 XML declarations; embedded fonts (obfuscated); DRM (must be rejected); fixed layout (must be rejected); malformed ZIP; CJK and right-to-left text; very large books (10 MB or more).
+Collect real files covering: EPUB 2 and EPUB 3; nested TOC; no TOC; TOC pointing to fragments; one huge spine file; hundreds of tiny spine files; image-only cover page; non-linear spine items; non-UTF-8 XML declarations; embedded fonts (obfuscated); DRM (must be rejected); fixed layout (must be rejected); malformed ZIP; CJK and right-to-left text; very large books (10 MB or more); uppercase `.EPUB` and non-ASCII, spaces, or `%` in file names; several `rootfile` entries; missing `mimetype`; ZIP64 or data-descriptor archives; `encryption.xml` listing only font obfuscation.
 
 ### 9.3 Integration tests
 - Run the sync engine against a local Supabase instance (`supabase start`, needs Docker) with real RLS.
@@ -1240,6 +1333,9 @@ Collect real files covering: EPUB 2 and EPUB 3; nested TOC; no TOC; TOC pointing
 | Sync clobbers newer data | Server-side latest-wins trigger; tests with two simulated devices |
 | Merely opening a book overwrites a newer position from another device | Write progress only after real movement (5.7); test it (9.4) |
 | Opening a book marks the document dirty (sync churn, metadata overwrites) | `last_opened_at` is local-only; `touchOpened` never sets `dirty` or `updated_at` |
+| Folder scan or picker silently misses some EPUBs | Case-insensitive name match, content validation, tolerant parser, per-file `ImportReport` and `import_log` (5.1.1) |
+| Covers drawn cropped or stretched | Normalize at import, store dimensions, and fit by ratio (5.2.1) |
+| Reader renders a whole chapter in one `ScrollView` (current state) | Chunked virtualized list (5.6) before testing large books |
 | Per-book style rows left behind after a book is deleted | Purge `reader.book.<documentId>` locally on delete; the rows are tiny |
 | Expecting a blanket "storage permission" to expose all files on Android | Offer manual import plus a folder-based scan (Storage Access Framework); hide scan on iOS (5.1) |
 | Clock skew breaks last-write-wins | Server-assigned cursor; clamp future timestamps; consider version counters |
@@ -1273,20 +1369,21 @@ Collect real files covering: EPUB 2 and EPUB 3; nested TOC; no TOC; TOC pointing
 
 ## 12. Suggested Milestones
 
-| Milestone | Deliverable | Rough exit criteria |
-|---|---|---|
-| **M0** | Decisions documented | Formats, sync scope, sync approach, conflict policy, position model, progress setting written down (this document) |
-| **M1** | Project scaffold | App runs on a physical device in Expo Go; CI green; Supabase dev project linked and migration applied |
-| **M2** | Local data layer | Migrations (including formats and chapters), repositories, and tests pass |
-| **M3** | Text model and TXT slice | Shared normalization, chunking, and position math with tests; import, read, save, and restore a TXT file in airplane mode |
-| **M4** | **EPUB reader (primary)** | EPUB import (unzip, OPF, TOC, cover, extraction), chapter navigation, library with covers, navigation layout (bottom bar or side drawer), grid/list view options, manual import and Android folder scan, categorized settings, app themes and fonts, per-book reading style, progress display setting and library order setting (recent vs. fixed, with sort and filters), each with a first-run prompt; golden-file and determinism tests pass; large-book performance acceptable |
-| **M5** | PDF and annotations | Text-based PDF import via pdf.js; bookmarks, highlights, and notes working across all formats |
-| **M6** | Backend | Postgres schema, RLS, triggers, migrations; cross-user access test passes |
-| **M7** | Google sign-in | EAS development build installed; sign in/out works on both platforms; session persists; optional-auth flows done |
-| **M8** | Sync v1 | Push/pull for all tables; "Not on this device" flow; sync status UI; two-device test passes with latest-wins progress |
-| **M9** | Hardening | Offline/failure/security/performance tests done; EPUB corpus passes |
-| **M10** | Beta | TestFlight / Play internal testing; fix feedback |
-| **M11** | Release | Store submission, monitoring, and rollback plan |
+| Milestone | Deliverable | Status | Remaining |
+|---|---|---|---|
+| **M0** | Decisions documented | ✅ Done | None |
+| **M1** | Project scaffold | 🟡 Partial | Runs in Expo Go and Supabase is linked. CI is not set up. |
+| **M2** | Local data layer | 🟡 Partial | Migrations and repositories done. Reactive reads are minimal and there are no unit tests yet. |
+| **M3** | Text model and TXT slice | ✅ Done | Add position-math and normalization tests. |
+| **M4** | **EPUB reader (primary)** | 🟢 Advanced | Import, covers, TOC, library, settings, per-book style, and progress are done. Open: cover size and aspect fix (5.2.1), scan and import reliability (5.1.1), chunked rendering (5.6), golden-file tests. |
+| **M4b** | **Reader screen parity** (new) | ⬜ Next | Contents panel (Contents, Annotations, Bookmarks), display popup, in-book search with history, and scrubber (5.6.1). Paged flow after scrolled. |
+| **M5** | PDF and annotations | ⬜ Not started | pdf.js extraction spike; highlight and note UI and storage. |
+| **M6** | Backend | 🟡 Partial | SQL is written. Verify RLS, triggers, and the cross-user test against the live project. |
+| **M7** | Google sign-in | ⬜ Not started | EAS development build, sign in and out, optional-auth flows. |
+| **M8** | Sync v1 | ⬜ Not started | Push/pull, "Not on this device", status UI, two-device test. |
+| **M9** | Hardening | ⬜ Not started | Offline, failure, security, and performance tests; EPUB corpus (9.2). |
+| **M10** | Beta | ⬜ Not started | TestFlight / Play internal testing. |
+| **M11** | Release | ⬜ Not started | Store submission, monitoring, rollback plan. |
 
 ---
 

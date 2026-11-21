@@ -1,9 +1,10 @@
 import * as Crypto from 'expo-crypto';
-import { File } from 'expo-file-system';
+import { File, FileMode } from 'expo-file-system';
 import * as FileSystem from 'expo-file-system/legacy';
+import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import { Platform } from 'react-native';
 
-import { chapters, documents } from '@/db/repositories';
+import { chapters, documents, importLog } from '@/db/repositories';
 import { importEpub } from '@/formats/epub/importEpub';
 import { importTxt } from '@/formats/txt/importTxt';
 import { NORMALIZATION_VERSION } from '@/text/normalize';
@@ -17,7 +18,7 @@ export interface PickedFile {
 
 export type ImportResult =
   | { status: 'added'; title: string }
-  | { status: 'duplicate'; title: string }
+  | { status: 'duplicate'; title: string; documentId: string }
   | { status: 'unsupported'; title: string; reason: string }
   | { status: 'error'; title: string; reason: string };
 
@@ -70,6 +71,12 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
 }
 
 async function sha256Hex(uri: string): Promise<string> {
+  // Preferred: the native File.digest streams the file without loading it.
+  try {
+    return await new File(uri).digest('SHA-256');
+  } catch {
+    /* fall through to the JS path */
+  }
   try {
     const buf = await new File(uri).arrayBuffer();
     const digest = await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, buf);
@@ -94,21 +101,135 @@ async function cleanup(dir: string) {
   }
 }
 
+// --- Cover normalization (plan 5.2.1) -----------------------------------------
+
+/** Detect the real image type from magic bytes; returns null for SVG/unknown. */
+function sniffImageType(bytes: Uint8Array): 'jpeg' | 'png' | 'gif' | 'webp' | null {
+  if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'jpeg';
+  if (
+    bytes.length > 8 &&
+    bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+  )
+    return 'png';
+  if (bytes.length > 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return 'gif';
+  if (
+    bytes.length > 12 &&
+    bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+    bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+  )
+    return 'webp';
+  return null;
+}
+
+/** PNG IHDR color type (byte 25) 4 or 6 means the image has an alpha channel. */
+function pngHasAlpha(bytes: Uint8Array): boolean {
+  return bytes.length > 25 && bytes[25] !== undefined && (bytes[25] === 4 || bytes[25] === 6);
+}
+
+const COVER_MAX_EDGE = 1200;
+
 /**
- * Resiliently copy or stream a file into the app sandbox.
- * Handles Android content:// URIs, SAF document URIs, and standard file:// URIs,
- * providing graceful fallbacks if ExponentFileSystem.copyAsync throws java.io.IOException.
+ * Normalize a cover once at import: write the raw bytes to a temp file, decode
+ * it (downscaling the long edge to <=1200px via the decoder), and re-encode as
+ * JPEG — PNG when the source has an alpha channel. Returns the final cover URI
+ * and pixel dimensions, or null when the bytes are not a usable raster image.
+ */
+async function normalizeCover(
+  bytes: Uint8Array,
+  bookDir: string
+): Promise<{ uri: string; width: number; height: number } | null> {
+  const type = sniffImageType(bytes);
+  if (!type) return null; // SVG and unknown types fall back to the generated cover
+
+  const srcExt = type === 'jpeg' ? 'jpg' : type;
+  const srcUri = `${bookDir}/cover-src.${srcExt}`;
+  await FileSystem.writeAsStringAsync(srcUri, uint8ArrayToBase64(bytes), {
+    encoding: FileSystem.EncodingType.Base64,
+  });
+
+  try {
+    const keepPng = type === 'png' && pngHasAlpha(bytes);
+    // New contextual API (manipulateAsync is deprecated in SDK 58): decode with
+    // a size cap so large covers never load at full resolution, then save.
+    const context = ImageManipulator.manipulate(srcUri, {
+      maxWidth: COVER_MAX_EDGE,
+      maxHeight: COVER_MAX_EDGE,
+    });
+    const image = await context.renderAsync();
+    if (!image.width || !image.height) return null;
+    const result = await image.saveAsync({
+      compress: 0.9,
+      format: keepPng ? SaveFormat.PNG : SaveFormat.JPEG,
+    });
+
+    const ext = keepPng ? 'png' : 'jpg';
+    const destUri = `${bookDir}/cover.${ext}`;
+    try {
+      await new File(result.uri).copy(new File(destUri), { overwrite: true });
+    } catch {
+      await FileSystem.copyAsync({ from: result.uri, to: destUri });
+    }
+    await FileSystem.deleteAsync(result.uri, { idempotent: true }).catch(() => {});
+    return { uri: destUri, width: result.width, height: result.height };
+  } catch {
+    return null; // undecodable image — the generated cover is used instead
+  } finally {
+    await FileSystem.deleteAsync(srcUri, { idempotent: true }).catch(() => {});
+  }
+}
+
+/** Chunked copy fallback: stream the source through a FileHandle in 1 MB pieces. */
+async function copyChunked(sourceUri: string, targetUri: string): Promise<void> {
+  const src = new File(sourceUri);
+  const dst = new File(targetUri);
+  dst.create({ intermediates: true, overwrite: true });
+  const inHandle = src.open(FileMode.ReadOnly);
+  const outHandle = dst.open(FileMode.WriteOnly);
+  try {
+    const CHUNK = 1024 * 1024;
+    for (;;) {
+      const buf = await inHandle.readBytes(CHUNK);
+      if (buf.length === 0) break;
+      await outHandle.writeBytes(buf);
+    }
+  } finally {
+    inHandle.close();
+    outHandle.close();
+  }
+}
+
+/**
+ * Resiliently copy a picked file into the app sandbox.
+ * The new File API's copy() handles Android content:// and SAF URIs natively;
+ * legacy copyAsync/readAsStringAsync are kept only as last-resort fallbacks
+ * because they reject some DocumentPicker cache files with "isn't readable".
  */
 async function stageFile(sourceUri: string, targetUri: string): Promise<void> {
-  // Strategy 1: standard FileSystem.copyAsync
+  // Strategy 1: new File API copy (native, content-URI aware)
+  try {
+    await new File(sourceUri).copy(new File(targetUri), { overwrite: true });
+    return;
+  } catch {
+    /* try the next strategy */
+  }
+
+  // Strategy 2: chunked stream copy via FileHandle (bounded memory)
+  try {
+    await copyChunked(sourceUri, targetUri);
+    return;
+  } catch {
+    /* try the legacy fallbacks */
+  }
+
+  // Strategy 3: native FileSystem.copyAsync (streams without memory balloon)
   try {
     await FileSystem.copyAsync({ from: sourceUri, to: targetUri });
     return;
   } catch {
-    // If copyAsync failed (e.g. java.io.IOException on Android content/SAF URIs), try fallbacks
+    /* try base64 fallbacks */
   }
 
-  // Strategy 2: readAsStringAsync as Base64 then writeAsStringAsync
+  // Strategy 4: legacy base64 read/write
   try {
     const b64 = await FileSystem.readAsStringAsync(sourceUri, {
       encoding: FileSystem.EncodingType.Base64,
@@ -118,7 +239,7 @@ async function stageFile(sourceUri: string, targetUri: string): Promise<void> {
     });
     return;
   } catch (readErr) {
-    // Strategy 3: StorageAccessFramework readAsStringAsync for Android SAF URIs
+    // Strategy 4: StorageAccessFramework readAsStringAsync for Android SAF URIs
     if (Platform.OS === 'android' && FileSystem.StorageAccessFramework) {
       try {
         const b64 = await FileSystem.StorageAccessFramework.readAsStringAsync(sourceUri, {
@@ -137,11 +258,28 @@ async function stageFile(sourceUri: string, targetUri: string): Promise<void> {
 }
 
 /**
- * Import one picked file into the library. Copies it into the app sandbox,
- * hashes it (SHA-256 of the file bytes), dedupes by hash, extracts text for
- * supported formats, and writes the document + chapter rows in one transaction.
+ * Import one picked file into the library. Every outcome is written to
+ * `import_log` (plan 5.1.1) so scan/picker runs never fail silently.
  */
 export async function importDocument(picked: PickedFile): Promise<ImportResult> {
+  const result = await runImport(picked);
+  const status =
+    result.status === 'added'
+      ? 'imported'
+      : result.status === 'duplicate'
+        ? 'duplicate'
+        : result.status === 'unsupported'
+          ? 'skipped'
+          : 'failed';
+  const reason =
+    result.status === 'added' ? undefined : 'reason' in result ? result.reason : result.title;
+  await importLog
+    .add({ fileName: picked.name, sourceUri: picked.uri, status, reason })
+    .catch(() => {});
+  return result;
+}
+
+async function runImport(picked: PickedFile): Promise<ImportResult> {
   const ext = extOf(picked.name);
   const title = titleFromFilename(picked.name);
   if (!ACCEPTED.includes(ext as DocumentFormat)) {
@@ -164,7 +302,7 @@ export async function importDocument(picked: PickedFile): Promise<ImportResult> 
     const existing = await documents.getByHash(contentHash);
     if (existing) {
       await cleanup(bookDir);
-      return { status: 'duplicate', title: existing.title };
+      return { status: 'duplicate', title: existing.title, documentId: existing.id };
     }
 
     let book;
@@ -196,17 +334,17 @@ export async function importDocument(picked: PickedFile): Promise<ImportResult> 
       await FileSystem.writeAsStringAsync(`${chaptersDir}/${padded}.txt`, ch.text);
     }
 
-    // Save cover image if available
+    // Normalize the cover once at import (plan 5.2.1): type-sniffed, resized,
+    // re-encoded, with intrinsic dimensions stored on the document row.
     let coverUri: string | null = null;
+    let coverWidth: number | null = null;
+    let coverHeight: number | null = null;
     if (book.coverData && book.coverData.length > 0) {
-      coverUri = `${bookDir}/cover.jpg`;
-      const coverB64 = uint8ArrayToBase64(book.coverData);
-      try {
-        await FileSystem.writeAsStringAsync(coverUri, coverB64, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-      } catch {
-        coverUri = null; // non-fatal if cover write fails
+      const cover = await normalizeCover(book.coverData, bookDir);
+      if (cover) {
+        coverUri = cover.uri;
+        coverWidth = cover.width;
+        coverHeight = cover.height;
       }
     }
 
@@ -219,6 +357,8 @@ export async function importDocument(picked: PickedFile): Promise<ImportResult> 
       local_uri: originalUri,
       text_dir: chaptersDir,
       cover_uri: coverUri,
+      cover_width: coverWidth,
+      cover_height: coverHeight,
       content_hash: book.contentHash,
       size_bytes: book.sizeBytes || null,
       encoding: book.encoding ?? null,

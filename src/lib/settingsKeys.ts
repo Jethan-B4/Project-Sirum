@@ -29,6 +29,9 @@ export const SettingKeys = {
   deviceAppFont: 'device.appFont',
   deviceShowBadges: 'device.showBadges',
   deviceShowDetails: 'device.showDetails',
+  deviceCoverFit: 'device.coverFit',
+  deviceSearchHistory: 'device.searchHistory',
+  deviceReaderBrightness: 'device.readerBrightness',
 } as const;
 
 export type SettingKey = (typeof SettingKeys)[keyof typeof SettingKeys];
@@ -76,16 +79,27 @@ export type ImportMethod = 'scan' | 'manual';
 export type AppThemeChoice = 'system' | 'dark' | 'light' | 'sepia';
 export type AccentChoice = 'green' | 'purple' | 'blue';
 export type AppFontChoice = 'system' | 'serif' | 'humanist' | 'mono';
+export type CoverFit = 'full' | 'crop';
 
-/** Reading display style. Style only — never changes character offsets. */
+/** Reading flow: continuous scroll (v1), paged, or auto (paged on wide screens). */
+export type ReadingFlow = 'auto' | 'paged' | 'scrolled';
+export type TextAlign = 'left' | 'justify';
+
+/**
+ * Reading display style. Style only — never changes character offsets.
+ * `size` is a percentage of the base font size (60–200, default 100) and
+ * `mar` is horizontal margin as a percentage of the reading width (0–10).
+ */
 export interface ReadingStyle {
   fam: 'serif' | 'sans' | 'mono';
   wt: 400 | 500 | 700;
-  size: number; // pt
+  size: number; // percent of base size
   lh: number; // line-height multiplier
-  mar: number; // horizontal margin
+  mar: number; // horizontal margin, % of reading width
   bg: string; // hex color
   tx: string; // hex color
+  flow: ReadingFlow;
+  align: TextAlign;
 }
 
 export interface SettingValues {
@@ -105,6 +119,9 @@ export interface SettingValues {
   [SettingKeys.deviceAppFont]: AppFontChoice;
   [SettingKeys.deviceShowBadges]: boolean;
   [SettingKeys.deviceShowDetails]: boolean;
+  [SettingKeys.deviceCoverFit]: CoverFit;
+  [SettingKeys.deviceSearchHistory]: string[];
+  [SettingKeys.deviceReaderBrightness]: number;
 }
 
 // --- In-memory defaults (never persisted) -----------------------------------
@@ -112,11 +129,13 @@ export interface SettingValues {
 export const DEFAULT_READING_STYLE: ReadingStyle = {
   fam: 'serif',
   wt: 400,
-  size: 18,
+  size: 100,
   lh: 1.6,
-  mar: 20,
+  mar: 2,
   bg: '#121212',
   tx: '#e6e6e6',
+  flow: 'scrolled',
+  align: 'justify',
 };
 
 export const SettingDefaults: SettingValues = {
@@ -127,15 +146,18 @@ export const SettingDefaults: SettingValues = {
   [SettingKeys.librarySortDirection]: 'desc',
   [SettingKeys.libraryFilters]: {},
   [SettingKeys.deviceNavMode]: 'bottom',
-  [SettingKeys.deviceLibraryLayout]: 'cols3',
+  [SettingKeys.deviceLibraryLayout]: 'cols2',
   [SettingKeys.deviceViewMode]: 'grid',
-  [SettingKeys.deviceGridSize]: 3,
+  [SettingKeys.deviceGridSize]: 2,
   [SettingKeys.deviceImportMethod]: 'scan',
   [SettingKeys.deviceTheme]: 'system',
   [SettingKeys.deviceAccent]: 'green',
   [SettingKeys.deviceAppFont]: 'system',
   [SettingKeys.deviceShowBadges]: true,
   [SettingKeys.deviceShowDetails]: true,
+  [SettingKeys.deviceCoverFit]: 'full',
+  [SettingKeys.deviceSearchHistory]: [],
+  [SettingKeys.deviceReaderBrightness]: 100,
 };
 
 // --- Related constants -------------------------------------------------------
@@ -182,4 +204,23 @@ export function parseBookStyle(raw: string | null | undefined): Partial<ReadingS
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Normalize a stored style patch to current units. Styles saved before the
+ * percentage change stored `size` in pt (14–28) and `mar` in px (0–48);
+ * current values are percentages (size 60–200, mar 0–10).
+ */
+export function normalizeStylePatch(
+  patch: Partial<ReadingStyle> | undefined
+): Partial<ReadingStyle> | undefined {
+  if (!patch) return patch;
+  const out = { ...patch };
+  if (typeof out.size === 'number' && out.size > 0 && out.size <= 30) {
+    out.size = Math.round((out.size / 18) * 100);
+  }
+  if (typeof out.mar === 'number' && out.mar > 10) {
+    out.mar = Math.min(10, Math.round(out.mar / 4));
+  }
+  return out;
 }

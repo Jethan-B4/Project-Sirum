@@ -1,17 +1,19 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import React, { useCallback, useEffect, useState } from 'react';
-import { Platform, Pressable, ScrollView, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, Share, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { AppBar, Screen, useChrome } from '@/components/chrome/app-bar';
 import { Section, SegmentedControl, PrimaryButton } from '@/components/ui/controls';
 import { useSettings } from '@/features/settings/SettingsProvider';
-import { importDocument } from './importer';
+import { importDocument, type ImportResult } from './importer';
 import { SettingKeys, type ImportMethod } from '@/lib/settingsKeys';
 
 const SCAN_URI_KEY = 'sirum.scanFolderUri';
-const ACCEPTED_EXT = ['txt', 'epub', 'pdf'];
+const ACCEPTED_RE = /\.(txt|epub|pdf)$/i;
+const MAX_DEPTH = 12;
 
 interface ScanFile {
   name: string;
@@ -23,15 +25,44 @@ interface ScanFile {
 interface ScanState {
   files: ScanFile[];
   done: boolean;
+  errors: string[];
 }
 
-/** Recursively collect candidate files under a SAF directory URI. */
-async function scanTree(uri: string, depth = 0): Promise<ScanFile[]> {
-  if (depth > 6) return [];
+/** One file's outcome within an import run (plan 5.1.1 ImportReport). */
+interface RunItem {
+  name: string;
+  uri: string;
+  status: ImportResult['status'];
+  reason?: string;
+  documentId?: string;
+}
+
+/** File name from a (possibly percent-encoded) SAF/document URI. */
+function nameFromUri(uri: string): string {
+  const decoded = decodeURIComponent(uri);
+  const raw = decoded.split('/').pop()?.split(':').pop() || 'book';
+  return raw;
+}
+
+/**
+ * Recursively collect candidate files under a SAF directory URI.
+ * Case-insensitive extension match on the decoded name (SAF URIs percent-encode
+ * '/' as %2F, and providers report inconsistent MIME types). A visited set
+ * guards against loops; unreadable folders are recorded, not silently skipped.
+ */
+async function scanTree(
+  uri: string,
+  depth: number,
+  visited: Set<string>,
+  errors: string[]
+): Promise<ScanFile[]> {
+  if (depth > MAX_DEPTH || visited.has(uri)) return [];
+  visited.add(uri);
   let entries: string[] = [];
   try {
     entries = await FileSystem.StorageAccessFramework.readDirectoryAsync(uri);
   } catch {
+    errors.push(`Could not read a folder (${nameFromUri(uri)})`);
     return [];
   }
   const out: ScanFile[] = [];
@@ -41,20 +72,32 @@ async function scanTree(uri: string, depth = 0): Promise<ScanFile[]> {
       .then(() => true)
       .catch(() => false);
     if (isDir) {
-      out.push(...(await scanTree(itemUri, depth + 1)));
+      out.push(...(await scanTree(itemUri, depth + 1, visited, errors)));
     } else {
-      const decoded = decodeURIComponent(itemUri);
-      const rawName = decoded.split('/').pop()?.split(':').pop() || 'book';
-      const ext = rawName.includes('.') ? rawName.split('.').pop()!.toLowerCase() : '';
-      if (ACCEPTED_EXT.includes(ext)) {
-        out.push({ name: rawName, path: itemUri, ext, selected: true });
+      const rawName = nameFromUri(itemUri);
+      const m = rawName.match(ACCEPTED_RE);
+      if (m) {
+        out.push({
+          name: rawName,
+          path: itemUri,
+          ext: m[1].toLowerCase(),
+          selected: true,
+        });
       }
     }
   }
   return out;
 }
 
+const RESULT_LABEL: Record<RunItem['status'], string> = {
+  added: 'Imported',
+  duplicate: 'Duplicate',
+  unsupported: 'Skipped',
+  error: 'Failed',
+};
+
 export default function ImportScreen() {
+  const router = useRouter();
   const { get, set } = useSettings();
   const { toast } = useChrome();
   const navMode = get(SettingKeys.deviceNavMode);
@@ -63,7 +106,7 @@ export default function ImportScreen() {
   const [tab, setTab] = useState<ImportMethod>(method);
   const [scanUri, setScanUri] = useState<string | null>(null);
   const [scan, setScan] = useState<ScanState | null>(null);
-  const [log, setLog] = useState<string[]>([]);
+  const [run, setRun] = useState<RunItem[] | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -72,7 +115,29 @@ export default function ImportScreen() {
       .catch(() => {});
   }, []);
 
-  const pushLog = (line: string) => setLog((l) => [...l, line]);
+  const record = useCallback((item: RunItem) => {
+    setRun((r) => [...(r ?? []), item]);
+  }, []);
+
+  const importOne = useCallback(
+    async (uri: string, name: string, size?: number | null) => {
+      const result = await importDocument({ uri, name, size });
+      record({
+        name,
+        uri,
+        status: result.status,
+        reason:
+          result.status === 'unsupported' || result.status === 'error'
+            ? result.reason
+            : result.status === 'duplicate'
+              ? `Already in your library (${result.title})`
+              : undefined,
+        documentId: result.status === 'duplicate' ? result.documentId : undefined,
+      });
+      return result.status === 'added';
+    },
+    [record]
+  );
 
   const requestAccess = useCallback(async () => {
     if (Platform.OS !== 'android') return;
@@ -99,34 +164,29 @@ export default function ImportScreen() {
       await requestAccess();
       return;
     }
-    setScan({ files: [], done: false });
-    const files = await scanTree(scanUri);
-    setScan({ files, done: true });
+    setScan({ files: [], done: false, errors: [] });
+    const errors: string[] = [];
+    const files = await scanTree(scanUri, 0, new Set(), errors);
+    setScan({ files, done: true, errors });
   }, [scanUri, requestAccess]);
 
   const addScanned = useCallback(async () => {
     if (!scan) return;
     const chosen = scan.files.filter((f) => f.selected);
     setBusy(true);
+    setRun([]);
     let added = 0;
     for (const f of chosen) {
-      const result = await importDocument({ uri: f.path, name: f.name });
-      if (result.status === 'added') added++;
-      pushLog(
-        result.status === 'added'
-          ? `Added ${result.title}`
-          : result.status === 'duplicate'
-            ? `Skipped ${f.name} (already in library)`
-            : `${f.name}: ${result.reason}`
-      );
+      if (await importOne(f.path, f.name)) added++;
     }
     setScan(null);
     setBusy(false);
     toast(`Added ${added} book${added === 1 ? '' : 's'}`);
-  }, [scan, toast]);
+  }, [scan, importOne, toast]);
 
   const pickFiles = useCallback(async () => {
     setBusy(true);
+    setRun([]);
     try {
       const res = await DocumentPicker.getDocumentAsync({
         type: [
@@ -140,22 +200,13 @@ export default function ImportScreen() {
         copyToCacheDirectory: true,
         multiple: true,
       });
-      if (res.canceled) return;
+      if (res.canceled) {
+        setRun(null);
+        return;
+      }
       let added = 0;
       for (const asset of res.assets) {
-        const result = await importDocument({
-          uri: asset.uri,
-          name: asset.name,
-          size: asset.size,
-        });
-        if (result.status === 'added') added++;
-        pushLog(
-          result.status === 'added'
-            ? `Added ${result.title}`
-            : result.status === 'duplicate'
-              ? `Skipped ${asset.name} (already in library)`
-              : `${asset.name}: ${result.reason}`
-        );
+        if (await importOne(asset.uri, asset.name, asset.size)) added++;
       }
       toast(`Added ${added} book${added === 1 ? '' : 's'}`);
     } catch {
@@ -163,7 +214,51 @@ export default function ImportScreen() {
     } finally {
       setBusy(false);
     }
-  }, [toast]);
+  }, [importOne, toast]);
+
+  /** Re-run only the files that errored in the last run. */
+  const retryFailed = useCallback(async () => {
+    if (!run) return;
+    const failed = run.filter((r) => r.status === 'error');
+    if (failed.length === 0) return;
+    setBusy(true);
+    setRun([]);
+    let added = 0;
+    for (const f of failed) {
+      if (await importOne(f.uri, f.name)) added++;
+    }
+    setBusy(false);
+    toast(`Retried ${failed.length}: added ${added}`);
+  }, [run, importOne, toast]);
+
+  const copyReport = useCallback(async () => {
+    if (!run || run.length === 0) return;
+    const counts = { added: 0, duplicate: 0, unsupported: 0, error: 0 };
+    for (const r of run) counts[r.status]++;
+    const lines = [
+      `Sirum import report — ${run.length} file${run.length === 1 ? '' : 's'}`,
+      `Imported: ${counts.added} · Duplicates: ${counts.duplicate} · Skipped: ${counts.unsupported} · Failed: ${counts.error}`,
+      '',
+      ...run.map((r) =>
+        r.reason ? `${r.name}: ${RESULT_LABEL[r.status]} — ${r.reason}` : `${r.name}: ${RESULT_LABEL[r.status]}`
+      ),
+    ];
+    try {
+      await Share.share({ message: lines.join('\n') });
+    } catch {
+      toast('Could not share the report');
+    }
+  }, [run, toast]);
+
+  const counts = run
+    ? {
+        added: run.filter((r) => r.status === 'added').length,
+        duplicate: run.filter((r) => r.status === 'duplicate').length,
+        skipped: run.filter((r) => r.status === 'unsupported').length,
+        failed: run.filter((r) => r.status === 'error').length,
+      }
+    : null;
+  const failedItems = run?.filter((r) => r.status === 'error') ?? [];
 
   const scanSupported = Platform.OS === 'android';
   const effectiveTab: ImportMethod = scanSupported ? tab : 'manual';
@@ -205,6 +300,11 @@ export default function ImportScreen() {
 
             {scan && (
               <Section title={scan.done ? `Found ${scan.files.length} files` : 'Scanning…'}>
+                {scan.errors.map((e, i) => (
+                  <Text key={i} className="font-ui text-mu text-[13px] mb-1">
+                    {e}
+                  </Text>
+                ))}
                 {scan.files.map((f, i) => (
                   <Pressable
                     key={f.path}
@@ -258,14 +358,42 @@ export default function ImportScreen() {
           </Section>
         )}
 
-        {log.length > 0 && (
-          <View className="mt-2">
-            {log.map((line, i) => (
-              <Text key={i} className="font-ui text-mu text-[13px]">
-                {line}
-              </Text>
+        {/* Import report: counts + per-file reasons (plan 5.1.1) */}
+        {run && run.length > 0 && counts && (
+          <Section
+            title={`${run.length} file${run.length === 1 ? '' : 's'} — ${counts.added} imported, ${counts.duplicate} duplicates, ${counts.skipped} skipped, ${counts.failed} failed`}>
+            {run.map((r, i) => (
+              <View key={`${r.name}-${i}`} className="flex-row items-start gap-2 py-1.5">
+                <Text className="font-ui text-mu text-[13px] w-20" numberOfLines={1}>
+                  {RESULT_LABEL[r.status]}
+                </Text>
+                <View className="flex-1 min-w-0">
+                  <Text numberOfLines={1} className="font-ui text-tx text-[13px] font-medium">
+                    {r.name}
+                  </Text>
+                  {!!r.reason && (
+                    <Text numberOfLines={2} className="font-ui text-mu text-[12px]">
+                      {r.reason}
+                    </Text>
+                  )}
+                </View>
+                {r.status === 'duplicate' && r.documentId && (
+                  <Pressable
+                    onPress={() => router.push(`/reader/${r.documentId}` as never)}
+                    className="px-2 py-1 rounded-full"
+                    style={{ backgroundColor: 'rgb(var(--acb))' }}>
+                    <Text className="font-ui text-accent text-[12px] font-semibold">Open</Text>
+                  </Pressable>
+                )}
+              </View>
             ))}
-          </View>
+            <View className="flex-row gap-2 mt-2">
+              {failedItems.length > 0 && (
+                <PrimaryButton label={`Retry failed (${failedItems.length})`} onPress={retryFailed} disabled={busy} />
+              )}
+              <PrimaryButton label="Copy report" ghost onPress={copyReport} />
+            </View>
+          </Section>
         )}
       </ScrollView>
     </Screen>

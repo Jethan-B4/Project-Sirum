@@ -24,7 +24,51 @@ Legend: ✅ done · 🟢 advanced / nearly done · 🟡 partial · ⬜ not start
 
 ---
 
-## Recent Updates (2026-11-19)
+## Recent Updates (2026-11-21)
+
+### 1. Library Order Modal Visibility & Repetition Fix
+- **Issue:** The initial modal asking "How should your library be ordered?" rendered with an unreadable, barely visible transparent background and repetitively popped up.
+- **Root Cause:** React Native's `StyleSheet.create` cannot parse CSS variable strings such as `rgb(var(--surface))`, causing the background to evaluate to transparent on native Android/iOS. Additionally, dismissing or re-navigating to the library re-triggered the prompt.
+- **Fix:**
+  - Styled `modalOverlay` with a darkened backdrop (`rgba(0,0,0,0.72)`) and `modalBox` with a solid theme-aware card container (`#1d1d22` in dark mode, `#ffffff` in light mode), crisp borders, and elevation shadow.
+  - Added an **"Always use this choice"** checkbox toggle to permanently persist `libraryOrderMode` to settings.
+  - Added an explanatory note stating: *"Note: You can change this choice anytime in Settings → Library."*
+  - Added `orderPromptDismissed` session state so that dismissing or answering the prompt once prevents it from re-appearing during normal tab navigation.
+
+### 2. Library Grid Layout & Book Cover Fitting (`landing_screen.jpg` Parity)
+- **Issue:** Book covers stretched vertically into screen-height columns instead of properly fitting into card containers.
+- **Root Cause:** `BookCover` was defining `height = '100%'` as a default prop, which in Yoga flex containers without a bounded height expanded downward to fill the entire screen, breaking the 2:3 aspect ratio.
+- **Fix:**
+  - Switched default layout to 2 columns (`cols2`, `deviceGridSize = 2`) matching `landing_screen.jpg`.
+  - Wrapped each book card in `cardWrapper` with rounded corners (`borderRadius: 10`), dark container background (`#212125`), and hidden overflow.
+  - Positioned the cover within `cardCoverFrame` constrained by `aspectRatio: 2 / 3` and `width: '100%'`, using `expo-image` with `contentFit="cover"`.
+  - Added `cardDetails` container below the cover displaying the book's title (bold, 1 line with truncation) and author (muted, 1 line with truncation).
+  - Cleaned up grid gap (`gap: 12`) and padding for balanced spacing.
+
+### 3. Book Cover Reading Landing Page (Image 3 Parity)
+- **Feature:** When opening a book that has cover artwork, the first chapter (chapter 0) now renders the book cover as a prominent hero landing page.
+- **Implementation (`ReaderScreen.tsx`):**
+  - Integrated `Image` from `expo-image` at the top of the reading scroll when `chIdx === 0 && doc?.cover_uri`.
+  - Container sized with `height: Math.min(winHeight * 0.70, 560)` and `contentFit="contain"`, allowing the cover artwork to display with its natural aspect ratio on a dark reader background, matching the reference `Lord of the Mysteries` layout.
+  - Scrolling down seamlessly continues into the book's chapter text.
+
+### 4. Database Insert Fix: Column & Value Count Mismatch (`22 values for 23 columns`)
+- **Issue:** 20 books failed import with `Error code 1: 22 values for 23 columns`.
+- **Root Cause:** In `src/db/repositories/documents.ts` (`create` method), the SQL statement listed 23 columns (`id, format, title, author, local_uri, text_dir, cover_uri, cover_width, cover_height, content_hash, size_bytes, encoding, normalization_version, chapter_count, char_count, storage_path, last_opened_at, created_at, updated_at, deleted_at, dirty, server_updated_at, sync_error`), but the `VALUES` clause only provided 18 `?` placeholders followed by 4 literals (`NULL, 1, NULL, NULL`), giving 22 values total. The 19th parameter (`now` for `updated_at`) had no corresponding `?` placeholder.
+- **Fix:** Corrected the `VALUES` clause to have 19 `?` placeholders plus the 4 sync/deletion literals (`19 + 4 = 23 values`), matching all 23 columns.
+
+### 5. Large EPUB OutOfMemoryError Resolution (`Lord of the Mysteries`)
+- **Issue:** Importing large EPUB files (such as webnovels ~138 MB) crashed on Android with:
+  `Call to function 'ExponentFileSystem.readAsStringAsync' has been rejected. → Caused by: java.lang.OutOfMemoryError: Failed to allocate a 185155328 byte allocation with 81184832 free bytes and 77MB until OOM, target footprint 268435456, growth limit 268435456`.
+- **Root Cause:** `importEpub.ts` used `FileSystem.readAsStringAsync` with `EncodingType.Base64` to load the archive. Converting a 138 MB binary file to Base64 in Java heap required a single contiguous 185 MB Java string allocation, which exceeded the Android JVM's 256 MB per-app heap limit (`growth limit 268435456`).
+- **Fix:**
+  - Implemented `readArchiveBytes(uri)` in `src/formats/epub/importEpub.ts` using chunked streaming through `FileHandle.readBytes(CHUNK)` (2 MB chunks) via `expo-file-system`. This streams data through bounded buffers directly into a Hermes native `Uint8Array` (in C++ memory outside Java VM heap constraints).
+  - Configured `fflate.unzipSync` with a selective entry filter that skips heavy embedded fonts (`.ttf`, `.otf`, `.woff`, `.woff2`) and multimedia files (`.mp3`, `.mp4`) that are not rendered in Sirum's text reading engine, drastically reducing memory usage during decompression.
+  - Added native `FileSystem.copyAsync` as Strategy 3 in `importer.ts` `stageFile` before any Base64 fallback, avoiding memory-ballooning when copying large picked files into the app sandbox.
+
+---
+
+## Previous Updates (2026-11-19)
 
 ### 1. EPUB File Scanning & Staging Bug Fix
 - **Issue:** Scanning on Android resulted in `ExponentFileSystem.copyAsync has been rejected -> caused by java.io.IOException`.
@@ -62,6 +106,39 @@ Legend: ✅ done · 🟢 advanced / nearly done · 🟡 partial · ⬜ not start
   - **Sub-settings pages** (`settings-*`): `animation: 'slide_from_right'` (220ms) for hierarchical drill-down navigation.
   - **Reader view** (`reader/[id]`): `animation: 'slide_from_bottom'` (260ms) for an immersive book-opening transition.
 
+### 5. Reader Screen Parity (plan 5.6.1, prototype `sirum-reader-prototype.html`)
+- **Per-chapter reading model:** the reader now shows one chapter at a time (prototype `S.ch`) instead of all chapters in one ScrollView. Progress is still stored as global UTF-16 offsets; chapter jumps map through `positionFromOffset`/`positionFromChapterOffset`.
+- **Top bar:** back, book title, in-book search, "Aa" display popup, and an overflow menu with **Add bookmark**, **Contents**, and **Settings**.
+- **Bottom bar:** current chapter title, percent, and a scrubber (slider seeks within the chapter). The percent label follows `reader.percentageMode` (book % or "Ch. N of M · x%").
+- **Contents panel** (`ContentsPanel.tsx`): right-side panel with three tabs — **Contents** (chapter list, current highlighted, tap to jump), **Annotations** (existing highlights/notes with delete), **Bookmarks** (chapter + % of chapter, tap to jump, delete).
+- **Display popup** (`DisplayPopup.tsx`): Flow (Auto/Paged/Scrolled — stored in `reader.style.flow`; only scrolled rendering is implemented so far), brightness slider (`expo-brightness` app brightness, restored on exit, `device.readerBrightness`), theme swatches + custom bg/text colors, text size %, align (left/justify), margin % — plus the required All-books/This-book scope switch.
+- **In-book search** (`SearchOverlay.tsx`): full-screen search; empty query shows recent searches (`device.searchHistory`, last 10, clearable); live results show chapter title + snippet with the match highlighted (cap 200); tapping jumps to chapter + offset.
+- **Bookmarks:** added from the overflow menu at the current position (`char_offset`, `chapter_index`, `chapter_char_offset`, snippet); listed and jumpable in the Contents panel.
+- New files: `src/features/reader/{ContentsPanel,DisplayPopup,SearchOverlay,types}.tsx/ts`; new repo `src/db/repositories/highlights.ts`.
+
+### 6. Cover Normalization & Fit (plan 5.2.1)
+- Covers are normalized once at import: type detected by **magic bytes** (JPEG/PNG/GIF/WebP; SVG and unknowns fall back to the generated cover), decoded via `expo-image-manipulator` with `maxWidth/maxHeight` 1200, re-encoded as JPEG (PNG kept when the source has alpha), and intrinsic dimensions stored in new local-only columns `documents.cover_width`/`cover_height` (migration `003_covers_and_import_log`).
+- `BookCover` now uses `expo-image` with `contentFit`: covers within ~8% of the 2:3 frame ratio fill the frame; wider/taller art is shown whole (`contain`) over a blurred, dimmed copy of itself. `device.coverFit` (`'full'` default, `'crop'`) forces crop-fill. Added to Settings → Library → Cover fit.
+
+### 7. Import Reliability & Diagnostics (plan 5.1.1, 4.8)
+- New local-only `import_log` table (migration 003) — every import outcome (imported/duplicate/skipped/failed + reason) is recorded, pruned to the latest ~200 rows (`src/db/repositories/importLog.ts`).
+- `ImportScreen` now shows an **ImportReport** per run: counts (found/imported/duplicates/skipped/failed) plus a per-file reason list, **Retry failed**, **Copy report** (share sheet), and an **Open** action on duplicates ("Already in your library").
+- Folder scan hardened: visited-set recursion (depth ≤ 12), case-insensitive extension match on the decoded file name, unreadable folders surfaced as scan errors instead of silently skipped.
+- `importDocument` returns the existing `documentId` on duplicates.
+
+### 8. Settings schema additions (plan 5.8)
+- New device-local keys: `device.coverFit`, `device.searchHistory`, `device.readerBrightness`.
+- `reader.style` gained `flow` (`auto`/`paged`/`scrolled`) and `align` (`left`/`justify`); `size` and `mar` are now **percentages** (size 60–200%, mar 0–10% of width). `normalizeStylePatch()` converts legacy pt/px values on read.
+- Settings → Reader gained a Brightness slider; Settings → Library gained Cover fit.
+
+### 9. Dependencies added
+- `expo-image-manipulator`, `expo-brightness` (SDK 58-compatible, via `npx expo install`).
+
+### 10. Fixes (2026-11-19, second pass)
+- **EPUB/picker import "isn't readable" failure:** `stageFile` now leads with the new `expo-file-system` `File` API (`File.copy`, `File.digest('SHA-256')`, `FileHandle` chunked streaming in 1 MB pieces) which handles Android `content://`/DocumentPicker cache URIs natively; legacy `copyAsync`/`readAsStringAsync` remain only as last-resort fallbacks. `sha256Hex` prefers native `file.digest`.
+- **Cover fit:** covers with unknown dimensions (pre-003 imports) now default to `contain` (show whole art over blurred backdrop) instead of crop-fill; only near-2:3 art or `device.coverFit='crop'` crops. Re-importing a book normalizes its cover and stores dimensions.
+- `ImageBackground` deprecation warning is **not from app code** — no `src/` file uses it; it comes from a transitive dependency rendering RN's deprecated component.
+
 ---
 
 ## What Was Built (UI Prototype Implementation)
@@ -82,7 +159,7 @@ The screens, layout, and interactions from `sirum-ui-prototype.html` are impleme
 | `/settings-import` | Import & storage | Import method + storage access |
 | `/settings-sync` | Sync | Account section (sign-in disabled until Phase 5) |
 | `/settings-about` | About | Version / privacy / licenses |
-| `/reader/[id]` | Reader | Reader + "Aa" display sheet |
+| `/reader/[id]` | Reader | Reader + top bar, bottom scrubber, contents panel, Aa popup, in-book search |
 
 ### Shared chrome (`src/components/`)
 
@@ -100,8 +177,11 @@ The screens, layout, and interactions from `sirum-ui-prototype.html` are impleme
 - `library/importer.ts` — resilient import pipeline: sandbox copy/stream staging → SHA-256 → dedupe → extract (TXT + EPUB) → cover extraction → DB.
 - `settings/SettingsProvider.tsx` — loads all settings into memory; typed getters/setters; stable object identity.
 - `settings/*Settings.tsx` + `SettingsPage.tsx` + `SettingsHubScreen.tsx`.
-- `reader/ReaderScreen.tsx` — chapter rendering, progress footer, Aa sheet with All-books/This-book scope, per-book overrides, position restore, debounced progress writes, keep-awake, ask-once percentage prompt.
-- `reader/ReadingStyleEditor.tsx` — shared style editor + live preview.
+- `reader/ReaderScreen.tsx` — per-chapter reader: progress footer + scrubber, overflow menu (bookmark/contents/settings), position restore, debounced progress writes, keep-awake, ask-once percentage prompt.
+- `reader/ContentsPanel.tsx` — right-side panel: Contents / Annotations / Bookmarks tabs.
+- `reader/DisplayPopup.tsx` — Aa popup: flow, brightness, theme, size %, align, margin %, scope switch.
+- `reader/SearchOverlay.tsx` — in-book search with history and snippet results.
+- `reader/ReadingStyleEditor.tsx` — shared style editor (settings page) + live preview; percentage size/margin, flow, align.
 
 ### Theming (`src/theme/`)
 
@@ -114,12 +194,15 @@ The screens, layout, and interactions from `sirum-ui-prototype.html` are impleme
 - `db/repositories/settings.ts` — `listAll`, `getRaw`, `setRaw` (device-local keys write `dirty = 0`), `remove`.
 - `db/repositories/documents.ts` — `list()` now JOINs `reading_progress` (percent, last_read_at), supports search, format/status filters, `recent` (recency = max of last_opened_at/last_read_at/created_at) and `fixed` sort modes.
 - `db/repositories/chapters.ts` — fixed table name (`document_chapters`).
+- `db/repositories/highlights.ts` — list/soft-delete for the Annotations tab.
+- `db/repositories/importLog.ts` — local-only import diagnostics (migration 003).
+- `db/migrations/003_covers_and_import_log.ts` — `cover_width`/`cover_height` + `import_log` table. Supabase counterpart created at `supabase/migrations/20261119000001_covers_and_import_log.sql` (columns/table exist server-side but stay unused — sync pushes explicit column lists; convention documented in the dev plan §4.8).
 - `formats/txt/importTxt.ts` — TXT → single normalized chapter.
 - `formats/epub/importEpub.ts` — EPUB 2/3 archive parsing, metadata, cover image, TOC, DRM detection, and normalized text extraction.
 
 ### Config & Dependencies
 
-- Added `fflate`, `fast-xml-parser`, `htmlparser2`.
+- Added `fflate`, `fast-xml-parser`, `htmlparser2`, `expo-image-manipulator`, `expo-brightness`.
 - NativeWind: `global.css`, `tailwind.config.js`, `babel.config.js`, `metro.config.js`, `nativewind-env.d.ts`.
 - ESLint flat config installed (`eslint.config.js`); `npx tsc --noEmit` and `npx eslint` pass cleanly with 0 errors.
 
@@ -145,8 +228,14 @@ The screens, layout, and interactions from `sirum-ui-prototype.html` are impleme
 | EPUB import & reading | ✅ | Pure-JS extraction (`fflate`, `fast-xml-parser`, `htmlparser2`) |
 | Settings hub + 6 sub-pages | ✅ | All prototype categories |
 | Appearance theme/accent/app font | ✅ | Runtime CSS vars, live switch |
-| Reader screen | ✅ | TXT and EPUB books readable end-to-end |
-| Reader "Aa" display sheet | ✅ | Scope all/book, presets, sliders, swatches, reset |
+| Reader screen | ✅ | Per-chapter reading, top bar, bottom scrubber, overflow menu |
+| Reader contents panel | ✅ | Contents / Annotations / Bookmarks tabs, tap-to-jump |
+| Reader display popup (Aa) | ✅ | Flow, brightness, theme, size %, align, margin %, scope switch |
+| In-book search | ✅ | History (last 10), live snippet results, jump-to-match |
+| Bookmarks | ✅ | Add from menu, list/jump/delete in panel |
+| Cover normalization & fit | ✅ | Magic-byte type detection, resize ≤1200px, dims stored, contain-over-blur |
+| Import report & diagnostics | ✅ | Per-file reasons, counts, retry failed, copy report, open duplicate |
+| Reader "Aa" display sheet | ✅ | Scope all/book, presets, sliders, swatches, reset (settings page editor) |
 | Per-book style overrides | ✅ | `reader.book.<id>` synced keys |
 | Progress display book/chapter | ✅ | Footer label + ask-once prompt |
 | Progress save/restore | ✅ | Debounced writes, restore on open, no write-on-open |
@@ -164,7 +253,8 @@ The screens, layout, and interactions from `sirum-ui-prototype.html` are impleme
 | M2 Data layer | Migrations + repos + tests | 🟡 Migrations & repos done; no tests yet |
 | M3 TXT slice | Import/read/save/restore TXT offline | ✅ Implemented and verified |
 | M4 EPUB reader | Full EPUB pipeline + UI features | ✅ Full EPUB extraction (OPF, TOC, covers, DRM detection) & redesigned UI |
-| M5 PDF + annotations | pdf.js extraction; bookmarks/highlights/notes | ⬜ Not started |
+| M4b Reader screen parity | Contents panel, display popup, in-book search, scrubber (5.6.1) | 🟢 Mostly done | Scrolled flow only — **paged flow not implemented**; highlight/note creation UI still pending (M5); chunked rendering still pending |
+| M5 PDF + annotations | pdf.js extraction; bookmarks/highlights/notes | 🟡 Partial | Bookmarks UI done; highlights list/delete only (no creation); PDF not started |
 | M6 Backend | Schema + RLS + triggers verified | 🟡 SQL written, unverified |
 | M7 Google sign-in | EAS dev build, sign in/out | ⬜ Not started |
 | M8 Sync v1 | Push/pull, "Not on this device", two-device test | ⬜ Not started |
@@ -177,8 +267,9 @@ The screens, layout, and interactions from `sirum-ui-prototype.html` are impleme
 
 ### Immediate (Phase 3 remaining)
 
-1. **PDF importer** — `react-native-webview` + pdf.js spike per plan 5.4.
-2. **Reactive reads** — repository change notifications so library updates without focus reloads (plan 4.6).
-3. **Bookmarks/highlights/notes UI** — repos exist (`bookmarks.ts`); no UI yet (plan 5.11).
-4. **Chapter navigation drawer** in reader (TOC, prev/next) — plan 5.6.
-5. **Chunked virtualized rendering** for very large books — currently renders all chapter text in one ScrollView.
+1. **Paged flow** — `reader.style.flow` accepts `paged`/`auto` but rendering is always scrolled (plan 5.6.1: paged paginates lazily with tap zones; auto picks paged on wide screens).
+2. **PDF importer** — `react-native-webview` + pdf.js spike per plan 5.4.
+3. **Highlight/note creation UI** — annotations tab lists existing rows only; text-selection anchoring is M5 scope (plan 5.11).
+4. **Reactive reads** — repository change notifications so library updates without focus reloads (plan 4.6).
+5. **Chunked/virtualized rendering** — each chapter still renders all its paragraphs in one ScrollView; very large chapters could jank.
+6. **Cover re-import** — books imported before migration 003 have no `cover_width`/`cover_height` and may have mislabeled `cover.jpg` bytes; a re-import normalizes them.

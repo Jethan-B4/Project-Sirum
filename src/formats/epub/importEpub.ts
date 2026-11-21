@@ -1,5 +1,6 @@
 import { XMLParser } from 'fast-xml-parser';
 import * as fflate from 'fflate';
+import { File, FileMode } from 'expo-file-system';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as htmlparser2 from 'htmlparser2';
 
@@ -167,17 +168,71 @@ function base64ToUint8Array(b64: string): Uint8Array {
   return out;
 }
 
-export async function importEpub(uri: string, opts: EpubOpts): Promise<ImportedBook> {
-  // Read archive bytes
+async function readArchiveBytes(uri: string): Promise<Uint8Array> {
+  const file = new File(uri);
+
+  // Strategy 1: Chunked stream read via FileHandle
+  // Streams through bounded 2 MB buffers into Hermes native typed array,
+  // preventing Android JVM from throwing OutOfMemoryError on large files (e.g. 50–150MB webnovels).
+  try {
+    const handle = file.open(FileMode.ReadOnly);
+    try {
+      const size = file.info().size ?? 0;
+      if (size > 0) {
+        const out = new Uint8Array(size);
+        let offset = 0;
+        const CHUNK = 2 * 1024 * 1024;
+        while (offset < size) {
+          const chunk = await handle.readBytes(Math.min(CHUNK, size - offset));
+          if (chunk.length === 0) break;
+          out.set(chunk, offset);
+          offset += chunk.length;
+        }
+        return out;
+      }
+    } finally {
+      handle.close();
+    }
+  } catch {
+    /* fallback to file.bytes() */
+  }
+
+  // Strategy 2: Direct file.bytes()
+  try {
+    return await file.bytes();
+  } catch {
+    /* fallback to file.arrayBuffer() */
+  }
+
+  // Strategy 3: Direct file.arrayBuffer()
+  try {
+    const buf = await file.arrayBuffer();
+    return new Uint8Array(buf);
+  } catch {
+    /* fallback to legacy Base64 */
+  }
+
+  // Strategy 4: Legacy readAsStringAsync (for small files in legacy environments)
   const b64 = await FileSystem.readAsStringAsync(uri, {
     encoding: FileSystem.EncodingType.Base64,
   });
-  const fileBytes = base64ToUint8Array(b64);
+  return base64ToUint8Array(b64);
+}
 
-  // Unzip all entries synchronously
+const NON_TEXT_ASSETS = /\.(ttf|otf|woff|woff2|eot|mp3|mp4|wav|m4a|webm|avi|mkv)$/i;
+
+export async function importEpub(uri: string, opts: EpubOpts): Promise<ImportedBook> {
+  // Read archive bytes using bounded, memory-efficient native reader
+  const fileBytes = await readArchiveBytes(uri);
+
+  // Unzip entries, skipping heavy embedded fonts and multimedia unused by the text reader
   let unzipped: fflate.Unzipped;
   try {
-    unzipped = fflate.unzipSync(fileBytes);
+    unzipped = fflate.unzipSync(fileBytes, {
+      filter(entry) {
+        return !NON_TEXT_ASSETS.test(entry.name);
+      },
+    });
   } catch {
     throw new Error('Failed to unpack EPUB archive. The file may be damaged or not a valid ZIP.');
   }

@@ -1,9 +1,11 @@
+import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useState } from 'react';
-import { Image, Pressable, StyleSheet, Text, View, type DimensionValue } from 'react-native';
+import { Pressable, StyleSheet, Text, View, type DimensionValue } from 'react-native';
 
 import { Icon } from '@/components/ui/icon';
 import type { LibraryDocument } from '@/db/repositories/documents';
+import { useAppTheme } from '@/theme/ThemeProvider';
 
 // Curated luxury book cover palette for titles without cover art
 const COVER_PALETTES: [string, string][] = [
@@ -34,13 +36,15 @@ export function BookCover({
   author,
   coverUri,
   width = '100%',
-  height = '100%',
-  radius = 8,
+  height,
+  radius = 0,
   compact = false,
 }: {
   title: string;
   author?: string | null;
   coverUri?: string | null;
+  coverWidth?: number | null;
+  coverHeight?: number | null;
   width?: DimensionValue;
   height?: DimensionValue;
   radius?: number;
@@ -56,7 +60,7 @@ export function BookCover({
         styles.coverContainer,
         {
           width,
-          height,
+          ...(height != null ? { height } : {}),
           borderRadius: radius,
         },
       ]}>
@@ -64,13 +68,18 @@ export function BookCover({
         <View style={StyleSheet.absoluteFill}>
           <Image
             source={{ uri: coverUri }}
-            style={{ width: '100%', height: '100%', borderRadius: radius }}
-            resizeMode="cover"
+            style={{
+              width: '100%',
+              height: '100%',
+              borderRadius: radius,
+            }}
+            contentFit="cover"
+            cachePolicy="memory-disk"
             onError={() => setImageError(true)}
           />
           {/* Subtle book spine shadow on the left */}
           <LinearGradient
-            colors={['rgba(0,0,0,0.4)', 'rgba(0,0,0,0.1)', 'transparent']}
+            colors={['rgba(0,0,0,0.32)', 'rgba(0,0,0,0.06)', 'transparent']}
             start={{ x: 0, y: 0.5 }}
             end={{ x: 1, y: 0.5 }}
             style={[styles.spineShadow, { borderTopLeftRadius: radius, borderBottomLeftRadius: radius }]}
@@ -160,19 +169,27 @@ interface CardProps {
 export function BookCard({ book, gridSize, showBadges, showDetails, onPress }: CardProps) {
   const overlay = gridSize >= 3;
   const p = pct(book);
+  const { isDark } = useAppTheme();
 
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={book.title}
       onPress={() => onPress(book)}
-      style={({ pressed }) => [styles.cardWrapper, { opacity: pressed ? 0.85 : 1 }]}>
+      style={({ pressed }) => [
+        styles.cardWrapper,
+        {
+          backgroundColor: isDark ? '#212125' : '#ffffff',
+          borderColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
+          opacity: pressed ? 0.88 : 1,
+        },
+      ]}>
       <View style={styles.cardCoverFrame}>
         <BookCover
           title={book.title}
           author={book.author}
           coverUri={book.cover_uri}
-          radius={8}
+          radius={overlay ? 10 : 0}
           compact={overlay}
         />
         <BookBadges book={book} showBadges={showBadges} />
@@ -198,25 +215,15 @@ export function BookCard({ book, gridSize, showBadges, showDetails, onPress }: C
         )}
       </View>
 
-      {/* 2-column detailed card info below cover */}
+      {/* 2-column detailed card info below cover (matching landing_screen.jpg) */}
       {!overlay && showDetails && (
-        <View style={styles.cardDetails}>
-          <Text numberOfLines={2} style={styles.cardTitle}>
+        <View style={[styles.cardDetails, { backgroundColor: isDark ? '#212125' : '#ffffff' }]}>
+          <Text numberOfLines={1} style={[styles.cardTitle, { color: isDark ? '#f4f4f6' : '#18181b' }]}>
             {book.title}
           </Text>
-          <Text numberOfLines={1} style={styles.cardAuthor}>
+          <Text numberOfLines={1} style={[styles.cardAuthor, { color: isDark ? '#9a9aa4' : '#64646e' }]}>
             {book.author ?? 'Unknown Author'}
           </Text>
-
-          {/* Progress bar and indicator */}
-          <View style={styles.cardProgressRow}>
-            <View style={styles.cardProgressTrack}>
-              <View style={[styles.cardProgressIndicator, { width: `${p}%` }]} />
-            </View>
-            <Text style={styles.cardProgressText}>
-              {p > 0 ? `${p}%` : 'Unread'}
-            </Text>
-          </View>
         </View>
       )}
     </Pressable>
@@ -238,6 +245,8 @@ export function BookRow({ book, onPress }: { book: LibraryDocument; onPress: (b:
           title={book.title}
           author={book.author}
           coverUri={book.cover_uri}
+          coverWidth={book.cover_width}
+          coverHeight={book.cover_height}
           width={52}
           height={78}
           radius={6}
@@ -395,16 +404,21 @@ const styles = StyleSheet.create({
   },
   cardWrapper: {
     flex: 1,
-    marginBottom: 6,
+    borderRadius: 10,
+    overflow: 'hidden',
+    borderWidth: 1,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.22,
+    shadowRadius: 4,
+    elevation: 3,
   },
   cardCoverFrame: {
+    width: '100%',
+    aspectRatio: 2 / 3,
     position: 'relative',
-    borderRadius: 8,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.22,
-    shadowRadius: 5,
-    elevation: 4,
+    overflow: 'hidden',
+    backgroundColor: '#161619',
   },
   compactOverlay: {
     position: 'absolute',
@@ -441,41 +455,18 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgb(var(--ac))',
   },
   cardDetails: {
+    paddingHorizontal: 10,
     paddingTop: 8,
-    paddingHorizontal: 2,
+    paddingBottom: 10,
   },
   cardTitle: {
-    color: 'rgb(var(--tx))',
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 13.5,
+    fontWeight: '700',
     lineHeight: 18,
   },
   cardAuthor: {
-    color: 'rgb(var(--mu))',
     fontSize: 12,
     marginTop: 2,
-  },
-  cardProgressRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 6,
-  },
-  cardProgressTrack: {
-    flex: 1,
-    height: 3,
-    backgroundColor: 'rgb(var(--surface-2))',
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  cardProgressIndicator: {
-    height: '100%',
-    backgroundColor: 'rgb(var(--ac))',
-  },
-  cardProgressText: {
-    fontSize: 11,
-    color: 'rgb(var(--mu))',
-    fontWeight: '500',
   },
   rowWrapper: {
     flexDirection: 'row',
