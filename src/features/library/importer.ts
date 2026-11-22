@@ -4,10 +4,13 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import { Platform } from 'react-native';
 
+import { getDb } from '@/db/client';
+import type { DocumentRow } from '@/db/repositories/documents';
 import { chapters, documents, importLog } from '@/db/repositories';
-import { importEpub } from '@/formats/epub/importEpub';
+import { importEpub, readEpubCover } from '@/formats/epub/importEpub';
 import { importTxt } from '@/formats/txt/importTxt';
 import { NORMALIZATION_VERSION } from '@/text/normalize';
+import type { Chapter } from '@/formats/types';
 import type { DocumentFormat } from '@/lib/settingsKeys';
 
 export interface PickedFile {
@@ -178,6 +181,48 @@ async function normalizeCover(
   }
 }
 
+async function repairCover(existing: DocumentRow, originalUri: string, stagingDir: string) {
+  if (!existing.local_uri) return;
+  if (existing.cover_uri && existing.cover_width && existing.cover_height) {
+    // Decode only the small existing cover. A healthy duplicate never opens the archive.
+    try {
+      const probe = ImageManipulator.manipulate(existing.cover_uri, { maxWidth: 1, maxHeight: 1 });
+      try {
+        const image = await probe.renderAsync();
+        const readable = image.width > 0 && image.height > 0;
+        image.release();
+        if (readable) return;
+      } finally {
+        probe.release();
+      }
+    } catch { /* recover from the matching EPUB */ }
+  }
+  const parent = existing.local_uri.slice(0, existing.local_uri.lastIndexOf('/'));
+  const noCover = parent + '/.no-embedded-cover';
+  if (!existing.cover_uri && (await FileSystem.getInfoAsync(noCover)).exists) return;
+  const bytes = await readEpubCover(originalUri);
+  if (!bytes) {
+    await FileSystem.writeAsStringAsync(noCover, '');
+    return;
+  }
+  const cover = await normalizeCover(bytes, stagingDir);
+  if (!cover) throw new Error('The original cover could not be decoded.');
+  const ext = cover.uri.endsWith('.png') ? 'png' : 'jpg';
+  const dest = parent + '/cover-' + Crypto.randomUUID() + '.' + ext;
+  await FileSystem.moveAsync({ from: cover.uri, to: dest });
+  try {
+    await documents.updateLocalCover(existing.id, dest, cover.width, cover.height);
+  } catch (error) {
+    await cleanup(dest);
+    throw error;
+  }
+  // Retire only artwork created in this book's own directory after the replacement commits.
+  const old = existing.cover_uri;
+  if (old?.startsWith(parent + '/') && /^cover(?:-[\da-f-]+)?\.(jpg|png)$/i.test(old.slice(parent.length + 1))) {
+    await cleanup(old);
+  }
+}
+
 /** Chunked copy fallback: stream the source through a FileHandle in 1 MB pieces. */
 async function copyChunked(sourceUri: string, targetUri: string): Promise<void> {
   const src = new File(sourceUri);
@@ -279,6 +324,16 @@ export async function importDocument(picked: PickedFile): Promise<ImportResult> 
   return result;
 }
 
+function chapterIndex(chapters: Chapter[]) {
+  return chapters.map((chapter) => ({
+    chapter_index: chapter.index,
+    title: chapter.title,
+    source_href: chapter.sourceHref ?? null,
+    start_offset: chapter.startOffset,
+    char_count: chapter.charCount,
+  }));
+}
+
 async function runImport(picked: PickedFile): Promise<ImportResult> {
   const ext = extOf(picked.name);
   const title = titleFromFilename(picked.name);
@@ -292,15 +347,20 @@ async function runImport(picked: PickedFile): Promise<ImportResult> {
   const chaptersDir = `${bookDir}/chapters`;
   const originalUri = `${bookDir}/original.${ext}`;
 
+  let contentHash: string | undefined;
   try {
+    const db = await getDb(); // Startup recovery finishes before staging begins.
     await FileSystem.makeDirectoryAsync(chaptersDir, { intermediates: true });
 
     // Stage the file safely into the sandbox
     await stageFile(picked.uri, originalUri);
 
-    const contentHash = await sha256Hex(originalUri);
+    contentHash = await sha256Hex(originalUri);
     const existing = await documents.getByHash(contentHash);
-    if (existing) {
+    // Older releases wrote all chapter files, then committed the document and index separately.
+    // Rebuild a missing index in place so external references to that document still work.
+    if (existing && (existing.chapter_count === 0 || await chapters.hasIndex(existing.id))) {
+      if (existing.format === 'epub') await repairCover(existing, originalUri, bookDir);
       await cleanup(bookDir);
       return { status: 'duplicate', title: existing.title, documentId: existing.id };
     }
@@ -328,6 +388,13 @@ async function runImport(picked: PickedFile): Promise<ImportResult> {
       };
     }
 
+    if (existing) {
+      await chapters.replaceForDocument(existing.id, chapterIndex(book.chapters));
+      if (existing.format === 'epub') await repairCover(existing, originalUri, bookDir);
+      await cleanup(bookDir);
+      return { status: 'duplicate', title: existing.title, documentId: existing.id };
+    }
+
     // Persist extracted chapter text beside the original (rebuildable cache).
     for (const ch of book.chapters) {
       const padded = String(ch.index).padStart(4, '0');
@@ -348,46 +415,43 @@ async function runImport(picked: PickedFile): Promise<ImportResult> {
       }
     }
 
-    // documents.create is an atomic INSERT
-    await documents.create({
-      id: documentId,
-      format: book.format,
-      title: book.title,
-      author: book.author ?? null,
-      local_uri: originalUri,
-      text_dir: chaptersDir,
-      cover_uri: coverUri,
-      cover_width: coverWidth,
-      cover_height: coverHeight,
-      content_hash: book.contentHash,
-      size_bytes: book.sizeBytes || null,
-      encoding: book.encoding ?? null,
-      normalization_version: book.normalizationVersion ?? NORMALIZATION_VERSION,
-      chapter_count: book.chapters.length,
-      char_count: book.charCount,
-      storage_path: null,
-      last_opened_at: null,
-    });
-
-    try {
+    if (format === 'epub' && !book.coverData) {
+      await FileSystem.writeAsStringAsync(bookDir + '/.no-embedded-cover', '');
+    }
+    await db.withExclusiveTransactionAsync(async (transaction) => {
+      await documents.create({
+        id: documentId,
+        format: book.format,
+        title: book.title,
+        author: book.author ?? null,
+        local_uri: originalUri,
+        text_dir: chaptersDir,
+        cover_uri: coverUri,
+        cover_width: coverWidth,
+        cover_height: coverHeight,
+        content_hash: book.contentHash,
+        size_bytes: book.sizeBytes || null,
+        encoding: book.encoding ?? null,
+        normalization_version: book.normalizationVersion ?? NORMALIZATION_VERSION,
+        chapter_count: book.chapters.length,
+        char_count: book.charCount,
+        storage_path: null,
+        last_opened_at: null,
+      }, transaction);
       await chapters.replaceForDocument(
         documentId,
-        book.chapters.map((c) => ({
-          chapter_index: c.index,
-          title: c.title,
-          source_href: c.sourceHref ?? null,
-          start_offset: c.startOffset,
-          char_count: c.charCount,
-        }))
+        chapterIndex(book.chapters),
+        transaction
       );
-    } catch (err) {
-      await documents.softDelete(documentId).catch(() => {});
-      throw err;
-    }
+    });
 
     return { status: 'added', title: book.title };
   } catch (err) {
     await cleanup(bookDir);
+    if (contentHash && /UNIQUE constraint failed: documents\.content_hash/i.test(String(err))) {
+      const winner = await documents.getByHash(contentHash);
+      if (winner) return { status: 'duplicate', title: winner.title, documentId: winner.id };
+    }
     return {
       status: 'error',
       title,

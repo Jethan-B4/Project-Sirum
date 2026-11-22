@@ -1,3 +1,4 @@
+import type { SQLiteDatabase } from 'expo-sqlite';
 import { getDb } from '../client';
 import { FINISHED_THRESHOLD, type DocumentFormat, type ReadingStatus } from '../../lib/settingsKeys';
 
@@ -32,6 +33,12 @@ export interface LibraryDocument extends DocumentRow {
   /** Book-wide progress 0–1, or null when the book has never been opened. */
   percent: number | null;
   last_read_at: string | null;
+}
+
+export interface HistoryDocument extends LibraryDocument {
+  chapter_index: number;
+  chapter_title: string | null;
+  last_read_at: string;
 }
 
 export type DocumentInput = Omit<
@@ -123,6 +130,19 @@ export const documents = {
     );
   },
 
+  async listHistory(): Promise<HistoryDocument[]> {
+    const db = await getDb();
+    return db.getAllAsync<HistoryDocument>(
+      `SELECT d.*, p.percent, p.last_read_at, p.chapter_index, c.title AS chapter_title
+       FROM reading_progress p
+       JOIN documents d ON d.id = p.document_id
+       LEFT JOIN document_chapters c
+         ON c.document_id = d.id AND c.chapter_index = p.chapter_index
+       WHERE p.deleted_at IS NULL AND d.deleted_at IS NULL
+       ORDER BY p.last_read_at DESC, d.id ASC`
+    );
+  },
+
   async getById(id: string): Promise<DocumentRow | null> {
     const db = await getDb();
     return db.getFirstAsync<DocumentRow>(
@@ -139,8 +159,8 @@ export const documents = {
     );
   },
 
-  async create(input: DocumentInput): Promise<void> {
-    const db = await getDb();
+  async create(input: DocumentInput, transaction?: SQLiteDatabase): Promise<void> {
+    const db = transaction ?? await getDb();
     const now = new Date().toISOString();
     await db.runAsync(
       `INSERT INTO documents (
@@ -171,6 +191,14 @@ export const documents = {
         now,
         now,
       ]
+    );
+  },
+
+  async updateLocalCover(id: string, uri: string, width: number, height: number) {
+    const db = await getDb();
+    await db.runAsync(
+      'UPDATE documents SET cover_uri = ?, cover_width = ?, cover_height = ? WHERE id = ?',
+      [uri, width, height, id]
     );
   },
 

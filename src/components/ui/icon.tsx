@@ -3,6 +3,7 @@ import React from 'react';
 import { Pressable, View } from 'react-native';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { contrastText } from '@/lib/color';
 import { useSettings } from '@/features/settings/SettingsProvider';
 import { SettingKeys } from '@/lib/settingsKeys';
 import { ThemePalettes, resolveThemeName } from '@/theme/palette';
@@ -19,7 +20,7 @@ function useIconColor(tone: Tone): string {
   const palette = ThemePalettes[resolveThemeName(get(SettingKeys.deviceTheme), scheme)];
 
   if (tone === 'accent') return accent.hex;
-  if (tone === 'onAccent') return '#ffffff';
+  if (tone === 'onAccent') return contrastText(accent.hex);
   if (tone === 'muted') return `rgb(${palette.mu})`;
   if (tone === 'default') return `rgb(${palette.tx})`;
   return tone; // concrete color passed through
@@ -72,7 +73,7 @@ export function PlayBadge() {
     <View
       className="absolute bottom-2 right-2 w-[34px] h-[34px] rounded-[10px] items-center justify-center"
       style={{ backgroundColor: accent.hexStrong }}>
-      <Ionicons name="play" size={18} color="#ffffff" />
+      <Ionicons name="play" size={18} color={contrastText(accent.hexStrong)} />
     </View>
   );
 }

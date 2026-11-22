@@ -10,6 +10,7 @@ import { BottomSheet } from '@/components/ui/sheet';
 import { documents, type LibraryDocument } from '@/db/repositories/documents';
 import { useSettings } from '@/features/settings/SettingsProvider';
 import { useAppTheme } from '@/theme/ThemeProvider';
+import { contrastText } from '@/lib/color';
 import {
   SettingKeys,
   type DocumentFormat,
@@ -220,7 +221,7 @@ export default function LibraryScreen() {
                 style={styles.emptyPrimaryButton}
                 onPress={() => router.push('/import' as never)}>
                 <Icon name="add" size={18} tone="onAccent" />
-                <Text style={styles.emptyPrimaryButtonText}>Import Books</Text>
+                <Text style={[styles.emptyPrimaryButtonText, { color: contrastText(accent.hex) }]}>Import Books</Text>
               </Pressable>
             </View>
           )}
@@ -343,7 +344,7 @@ export default function LibraryScreen() {
               <Pressable
                 style={[styles.modalPrimaryButton, { backgroundColor: accent.hex }]}
                 onPress={() => chooseOrder('recent')}>
-                <Text style={styles.modalPrimaryButtonText}>Recent first</Text>
+                <Text style={[styles.modalPrimaryButtonText, { color: contrastText(accent.hex) }]}>Recent first</Text>
               </Pressable>
             </View>
           </View>

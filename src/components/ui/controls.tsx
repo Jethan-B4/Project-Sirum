@@ -2,6 +2,7 @@ import Slider from '@react-native-community/slider';
 import React from 'react';
 import { Pressable, Text, View } from 'react-native';
 
+import { contrastText } from '@/lib/color';
 import { useAppTheme } from '@/theme/ThemeProvider';
 
 /** Selectable chip (prototype `.chip`). */
@@ -27,7 +28,11 @@ export function Chip({
         selected ? 'border-accent' : 'border-line'
       } ${disabled ? 'opacity-40' : ''}`}
       style={selected ? { backgroundColor: accent.acb } : undefined}>
-      <Text className="font-ui text-tx">{label}</Text>
+      <Text
+        className="font-ui"
+        style={selected ? { color: contrastText(accent.acb) } : undefined}>
+        {label}
+      </Text>
     </Pressable>
   );
 }
@@ -181,7 +186,9 @@ export function PrimaryButton({
       onPress={onPress}
       className={`rounded-full px-5 py-2.5 self-start mt-1 ${disabled ? 'opacity-40' : ''}`}
       style={{ backgroundColor: ghost ? 'transparent' : accent.hex }}>
-      <Text className={ghost ? 'font-ui text-accent font-semibold' : 'font-ui text-bg font-semibold'}>
+      <Text
+        className={ghost ? 'font-ui text-accent font-semibold' : 'font-ui font-semibold'}
+        style={ghost ? undefined : { color: contrastText(accent.hex) }}>
         {label}
       </Text>
     </Pressable>

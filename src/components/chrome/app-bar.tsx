@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Icon, IconButton, type IconName } from '@/components/ui/icon';
 import { useSettings } from '@/features/settings/SettingsProvider';
 import { SettingKeys } from '@/lib/settingsKeys';
+import { contrastText } from '@/lib/color';
 import { useAppTheme } from '@/theme/ThemeProvider';
 
 /** Top app bar (prototype `.bar`): optional leading control, title + count pill, actions. */
@@ -99,9 +100,13 @@ export function BottomNav() {
               <View
                 className="px-5 py-1 rounded-2xl mb-0.5"
                 style={on ? { backgroundColor: accent.acb } : undefined}>
-                <Icon name={item.icon} size={22} tone={on ? 'default' : 'muted'} />
+                <Icon name={item.icon} size={22} tone={on ? contrastText(accent.acb) : 'muted'} />
               </View>
-              <Text className={`font-ui text-[12px] ${on ? 'text-tx' : 'text-mu'}`}>{item.label}</Text>
+              <Text
+                className={`font-ui text-[12px] ${on ? '' : 'text-mu'}`}
+                style={on ? { color: contrastText(accent.acb) } : undefined}>
+                {item.label}
+              </Text>
             </Pressable>
           );
         })}
@@ -190,8 +195,12 @@ function SideDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
       onPress={onPress}
       className="flex-row items-center gap-5 px-5 py-3.5"
       style={activeItem ? { backgroundColor: accent.acb } : undefined}>
-      <Icon name={icon} size={22} tone={activeItem ? 'default' : 'default'} />
-      <Text className="font-ui text-tx text-base">{label}</Text>
+      <Icon name={icon} size={22} tone={activeItem ? contrastText(accent.acb) : 'default'} />
+      <Text
+        className="font-ui text-base"
+        style={activeItem ? { color: contrastText(accent.acb) } : { color: 'rgb(var(--tx))' }}>
+        {label}
+      </Text>
     </Pressable>
   );
 

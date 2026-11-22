@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
-import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Modal, FlatList, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useAppTheme } from '@/theme/ThemeProvider';
 import { Icon, type IconName } from '@/components/ui/icon';
 import type { BookmarkRow } from '@/db/repositories/bookmarks';
 import type { HighlightRow } from '@/db/repositories/highlights';
@@ -15,19 +16,6 @@ const TABS: readonly (readonly [Tab, IconName, string])[] = [
   ['bm', 'bookmark', 'Bookmarks'],
 ];
 
-/** ~80-char snippet of chapter text around a global UTF-16 offset. */
-function snippetAt(chapters: ReaderChapter[], globalOffset: number): string {
-  const ch = chapters.find(
-    (c, i) =>
-      globalOffset >= c.start_offset &&
-      (i === chapters.length - 1 || globalOffset < chapters[i + 1].start_offset)
-  );
-  if (!ch) return '';
-  const local = Math.max(0, globalOffset - ch.start_offset);
-  const start = Math.max(0, local - 40);
-  return ch.text.slice(start, local + 60).replace(/\s+/g, ' ').trim();
-}
-
 /**
  * Right-side contents panel (prototype `.pn`): Contents / Annotations /
  * Bookmarks tabs. Tapping an item jumps to that position in the book.
@@ -39,6 +27,7 @@ export function ContentsPanel({
   currentIndex,
   bookmarks,
   highlights,
+  readChapter,
   onJumpChapter,
   onJumpOffset,
   onDeleteBookmark,
@@ -50,6 +39,7 @@ export function ContentsPanel({
   currentIndex: number;
   bookmarks: BookmarkRow[];
   highlights: HighlightRow[];
+  readChapter(index: number): Promise<string>;
   /** Jump to a chapter index, optionally at a 0–1 fraction of that chapter. */
   onJumpChapter(index: number, fraction?: number): void;
   /** Jump to a global UTF-16 offset. */
@@ -58,8 +48,39 @@ export function ContentsPanel({
   onDeleteHighlight(id: string): void;
 }) {
   const insets = useSafeAreaInsets();
+  const { accent } = useAppTheme();
+  const { fontScale } = useWindowDimensions();
+  const rowHeight = Math.max(52, Math.ceil(42 * fontScale + 12));
   const [tab, setTab] = useState<Tab>('toc');
 
+  const [snippets, setSnippets] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!visible || tab !== 'ann') return;
+    let cancelled = false;
+    (async () => {
+      const next: Record<string, string> = {};
+      const grouped = new Map<number, HighlightRow[]>();
+      for (const highlight of highlights) {
+        const group = grouped.get(highlight.chapter_index) ?? [];
+        group.push(highlight);
+        grouped.set(highlight.chapter_index, group);
+      }
+      for (const [index, group] of grouped) {
+        if (cancelled) return;
+        const row = chapters[index];
+        if (!row) continue;
+        const text = await readChapter(row.chapter_index).catch(() => '');
+        for (const highlight of group) {
+          const offset = highlight.start_offset - row.start_offset;
+          next[highlight.id] = text.slice(Math.max(0, offset - 40), offset + 60).trim();
+        }
+      }
+      if (!cancelled) setSnippets(next);
+    })();
+    return () => { cancelled = true; };
+  }, [chapters, highlights, readChapter, tab, visible]);
+
+  if (!visible) return null;
   const chapterTitle = (index: number) =>
     chapters[index]?.title ?? `Chapter ${index + 1}`;
 
@@ -87,16 +108,19 @@ export function ContentsPanel({
                   accessibilityState={{ selected: on }}
                   onPress={() => setTab(key)}
                   className="flex-1 items-center pb-2 border-b-[3px]"
-                  style={{ borderBottomColor: on ? 'rgb(var(--ac))' : 'transparent' }}>
+                  style={{ borderBottomColor: on ? accent.hex : 'transparent' }}>
                   <Icon name={icon} size={20} tone={on ? 'default' : 'muted'} />
                 </Pressable>
               );
             })}
           </View>
 
-          <ScrollView contentContainerStyle={{ paddingVertical: 8 }}>
-            {tab === 'toc' &&
-              chapters.map((ch, i) => {
+          {tab === 'toc' ? (
+            <FlatList data={chapters}
+              initialScrollIndex={chapters.length ? currentIndex : undefined}
+              getItemLayout={(_, index) => ({ length: rowHeight, offset: rowHeight * index, index })}
+              keyExtractor={(ch) => String(ch.chapter_index)}
+              renderItem={({ item: ch, index: i }) => {
                 const on = i === currentIndex;
                 return (
                   <Pressable
@@ -105,18 +129,19 @@ export function ContentsPanel({
                       onClose();
                       onJumpChapter(i);
                     }}
-                    className="px-6 py-3.5"
-                    style={on ? { backgroundColor: 'rgb(var(--acb))' } : undefined}>
+                    className="px-6 justify-center"
+                    style={{ height: rowHeight, backgroundColor: on ? accent.hexStrong : undefined }}>
                     <Text
                       numberOfLines={2}
-                      className="font-ui text-[15px]"
-                      style={{ color: on ? 'rgb(var(--ac))' : 'rgb(var(--tx))' }}>
+                      className="font-ui text-tx text-[15px]"
+                      style={on ? { color: accent.hex } : undefined}>
                       {ch.title ?? `Chapter ${i + 1}`}
                     </Text>
                   </Pressable>
                 );
-              })}
-
+              }} />
+          ) : (
+          <ScrollView contentContainerStyle={{ paddingVertical: 8 }}>
             {tab === 'ann' &&
               (highlights.length === 0 ? (
                 <Text className="font-ui text-mu px-6 py-8">
@@ -124,7 +149,7 @@ export function ContentsPanel({
                 </Text>
               ) : (
                 highlights.map((h) => {
-                  const snippet = snippetAt(chapters, h.start_offset);
+                  const snippet = snippets[h.id];
                   return (
                     <View key={h.id} className="px-6 py-3.5">
                       <Pressable
@@ -196,7 +221,7 @@ export function ContentsPanel({
                   );
                 })
               ))}
-          </ScrollView>
+          </ScrollView>)}
         </View>
       </View>
     </Modal>

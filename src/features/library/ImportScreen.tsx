@@ -1,14 +1,27 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
-import React, { useCallback, useEffect, useState } from 'react';
-import { Platform, Pressable, ScrollView, Share, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  FlatList,
+  Platform,
+  Pressable,
+  ScrollView,
+  Share,
+  Text,
+  View,
+} from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Icon } from '@/components/ui/icon';
+import { contrastText } from '@/lib/color';
+import { useAppTheme } from '@/theme/ThemeProvider';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { AppBar, Screen, useChrome } from '@/components/chrome/app-bar';
 import { Section, SegmentedControl, PrimaryButton } from '@/components/ui/controls';
 import { useSettings } from '@/features/settings/SettingsProvider';
-import { importDocument, type ImportResult } from './importer';
+import { importDocument, type ImportResult, type PickedFile } from './importer';
 import { SettingKeys, type ImportMethod } from '@/lib/settingsKeys';
 
 const SCAN_URI_KEY = 'sirum.scanFolderUri';
@@ -24,7 +37,6 @@ interface ScanFile {
 
 interface ScanState {
   files: ScanFile[];
-  done: boolean;
   errors: string[];
 }
 
@@ -39,7 +51,12 @@ interface RunItem {
 
 /** File name from a (possibly percent-encoded) SAF/document URI. */
 function nameFromUri(uri: string): string {
-  const decoded = decodeURIComponent(uri);
+  let decoded = uri;
+  try {
+    decoded = decodeURIComponent(uri);
+  } catch {
+    /* Provider supplied an unescaped file name. */
+  }
   const raw = decoded.split('/').pop()?.split(':').pop() || 'book';
   return raw;
 }
@@ -54,7 +71,7 @@ async function scanTree(
   uri: string,
   depth: number,
   visited: Set<string>,
-  errors: string[]
+  errors: string[],
 ): Promise<ScanFile[]> {
   if (depth > MAX_DEPTH || visited.has(uri)) return [];
   visited.add(uri);
@@ -107,7 +124,11 @@ export default function ImportScreen() {
   const [scanUri, setScanUri] = useState<string | null>(null);
   const [scan, setScan] = useState<ScanState | null>(null);
   const [run, setRun] = useState<RunItem[] | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [activity, setActivity] = useState('');
+  const locked = useRef(false);
+  const busy = activity.length > 0;
+  const { accent } = useAppTheme();
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     AsyncStorage.getItem(SCAN_URI_KEY)
@@ -115,79 +136,83 @@ export default function ImportScreen() {
       .catch(() => {});
   }, []);
 
-  const record = useCallback((item: RunItem) => {
-    setRun((r) => [...(r ?? []), item]);
-  }, []);
-
-  const importOne = useCallback(
-    async (uri: string, name: string, size?: number | null) => {
-      const result = await importDocument({ uri, name, size });
-      record({
-        name,
-        uri,
-        status: result.status,
-        reason:
-          result.status === 'unsupported' || result.status === 'error'
-            ? result.reason
-            : result.status === 'duplicate'
-              ? `Already in your library (${result.title})`
-              : undefined,
-        documentId: result.status === 'duplicate' ? result.documentId : undefined,
-      });
-      return result.status === 'added';
-    },
-    [record]
-  );
-
-  const requestAccess = useCallback(async () => {
-    if (Platform.OS !== 'android') return;
+  async function perform(label: string, task: () => Promise<void>) {
+    if (locked.current) return;
+    locked.current = true;
+    setActivity(label);
     try {
-      const res = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
-      if (!res.granted) return;
-      await AsyncStorage.setItem(SCAN_URI_KEY, res.directoryUri);
-      setScanUri(res.directoryUri);
-      toast('Storage access granted');
-    } catch {
-      toast('Could not get storage access');
+      await task();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Operation could not finish');
+    } finally {
+      locked.current = false;
+      setActivity('');
     }
-  }, [toast]);
+  }
 
-  const revokeAccess = useCallback(async () => {
-    await AsyncStorage.removeItem(SCAN_URI_KEY);
-    setScanUri(null);
+  async function revokeAccess() {
+    await perform('Updating folder access�', async () => {
+      await AsyncStorage.removeItem(SCAN_URI_KEY);
+      setScanUri(null);
+      setScan(null);
+      toast('Storage access revoked');
+    });
+  }
+
+  async function runScan() {
+    await perform('Scanning folder�', async () => {
+      let folder = scanUri;
+      if (!folder) {
+        const result = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+        if (!result.granted) return;
+        folder = result.directoryUri;
+        await AsyncStorage.setItem(SCAN_URI_KEY, folder);
+        setScanUri(folder);
+      }
+      setRun(null);
+      setScan(null);
+      const errors: string[] = [];
+      const files = await scanTree(folder, 0, new Set(), errors);
+      setScan({ files, errors });
+    });
+  }
+
+  async function importFiles(files: PickedFile[]) {
+    const items: RunItem[] = [];
+    setRun(null);
+    for (const [index, file] of files.entries()) {
+      setActivity('Importing ' + (index + 1) + ' of ' + files.length + ' � ' + file.name);
+      try {
+        const result = await importDocument(file);
+        items.push({
+          name: file.name,
+          uri: file.uri,
+          status: result.status,
+          reason:
+            'reason' in result
+              ? result.reason
+              : result.status === 'duplicate'
+                ? 'Already in your library (' + result.title + ')'
+                : undefined,
+          documentId: result.status === 'duplicate' ? result.documentId : undefined,
+        });
+      } catch (error) {
+        items.push({
+          name: file.name,
+          uri: file.uri,
+          status: 'error',
+          reason: error instanceof Error ? error.message : 'Could not import file',
+        });
+      }
+    }
     setScan(null);
-    toast('Storage access revoked');
-  }, [toast]);
+    setRun(items);
+    const added = items.filter((item) => item.status === 'added').length;
+    toast('Added ' + added + (added === 1 ? ' book' : ' books'));
+  }
 
-  const runScan = useCallback(async () => {
-    if (!scanUri) {
-      await requestAccess();
-      return;
-    }
-    setScan({ files: [], done: false, errors: [] });
-    const errors: string[] = [];
-    const files = await scanTree(scanUri, 0, new Set(), errors);
-    setScan({ files, done: true, errors });
-  }, [scanUri, requestAccess]);
-
-  const addScanned = useCallback(async () => {
-    if (!scan) return;
-    const chosen = scan.files.filter((f) => f.selected);
-    setBusy(true);
-    setRun([]);
-    let added = 0;
-    for (const f of chosen) {
-      if (await importOne(f.path, f.name)) added++;
-    }
-    setScan(null);
-    setBusy(false);
-    toast(`Added ${added} book${added === 1 ? '' : 's'}`);
-  }, [scan, importOne, toast]);
-
-  const pickFiles = useCallback(async () => {
-    setBusy(true);
-    setRun([]);
-    try {
+  async function pickFiles() {
+    await perform('Choosing files�', async () => {
       const res = await DocumentPicker.getDocumentAsync({
         type: [
           'text/plain',
@@ -200,36 +225,9 @@ export default function ImportScreen() {
         copyToCacheDirectory: true,
         multiple: true,
       });
-      if (res.canceled) {
-        setRun(null);
-        return;
-      }
-      let added = 0;
-      for (const asset of res.assets) {
-        if (await importOne(asset.uri, asset.name, asset.size)) added++;
-      }
-      toast(`Added ${added} book${added === 1 ? '' : 's'}`);
-    } catch {
-      toast('Could not open the file picker');
-    } finally {
-      setBusy(false);
-    }
-  }, [importOne, toast]);
-
-  /** Re-run only the files that errored in the last run. */
-  const retryFailed = useCallback(async () => {
-    if (!run) return;
-    const failed = run.filter((r) => r.status === 'error');
-    if (failed.length === 0) return;
-    setBusy(true);
-    setRun([]);
-    let added = 0;
-    for (const f of failed) {
-      if (await importOne(f.uri, f.name)) added++;
-    }
-    setBusy(false);
-    toast(`Retried ${failed.length}: added ${added}`);
-  }, [run, importOne, toast]);
+      if (!res.canceled) await importFiles(res.assets);
+    });
+  }
 
   const copyReport = useCallback(async () => {
     if (!run || run.length === 0) return;
@@ -240,7 +238,9 @@ export default function ImportScreen() {
       `Imported: ${counts.added} · Duplicates: ${counts.duplicate} · Skipped: ${counts.unsupported} · Failed: ${counts.error}`,
       '',
       ...run.map((r) =>
-        r.reason ? `${r.name}: ${RESULT_LABEL[r.status]} — ${r.reason}` : `${r.name}: ${RESULT_LABEL[r.status]}`
+        r.reason
+          ? `${r.name}: ${RESULT_LABEL[r.status]} — ${r.reason}`
+          : `${r.name}: ${RESULT_LABEL[r.status]}`,
       ),
     ];
     try {
@@ -263,10 +263,14 @@ export default function ImportScreen() {
   const scanSupported = Platform.OS === 'android';
   const effectiveTab: ImportMethod = scanSupported ? tab : 'manual';
 
+  const reviewing = effectiveTab === 'scan' && scan != null;
+  const selected = scan?.files.filter((file) => file.selected) ?? [];
+  const footerPadding = navMode === 'side' ? Math.max(insets.bottom, 12) : 12;
+
   return (
     <Screen>
       <AppBar title="Import" leading={navMode === 'side' ? 'menu' : 'none'} />
-      <ScrollView contentContainerStyle={{ padding: 12, paddingBottom: 24 }}>
+      <View className="flex-1 px-3 pt-2" style={{ paddingBottom: footerPadding }}>
         {scanSupported && (
           <View className="mb-3">
             <SegmentedControl<ImportMethod>
@@ -274,128 +278,193 @@ export default function ImportScreen() {
                 ['scan', 'Scan device'],
                 ['manual', 'Manual import'],
               ]}
+              disabled={busy}
               value={effectiveTab}
               onChange={async (v) => {
+                if (v === tab) return;
                 setTab(v);
+                setRun(null);
                 await set(SettingKeys.deviceImportMethod, v);
               }}
             />
           </View>
         )}
 
-        {effectiveTab === 'scan' ? (
-          <>
-            <Section
-              title={`Storage access: ${scanUri ? 'granted' : 'not granted'}`}
-              description="Sirum looks for .txt, .epub and .pdf files in the folder you allow. Your files stay on this device.">
-              <PrimaryButton
-                label={scanUri ? 'Scan now' : 'Allow access and scan'}
-                onPress={runScan}
-                disabled={busy}
-              />
-              {scanUri && (
-                <PrimaryButton label="Revoke access" ghost onPress={revokeAccess} />
-              )}
-            </Section>
+        {busy && (
+          <View
+            accessibilityLiveRegion="polite"
+            className="flex-row items-center gap-3 rounded-xl bg-surface px-4 py-3 mb-2"
+          >
+            <ActivityIndicator color={accent.hex} />
+            <Text numberOfLines={2} className="flex-1 font-ui text-tx text-sm">
+              {activity}
+            </Text>
+          </View>
+        )}
 
-            {scan && (
-              <Section title={scan.done ? `Found ${scan.files.length} files` : 'Scanning…'}>
-                {scan.errors.map((e, i) => (
-                  <Text key={i} className="font-ui text-mu text-[13px] mb-1">
-                    {e}
+        {reviewing ? (
+          <>
+            <View className="flex-row items-center justify-between gap-3 mb-1">
+              <Text className="flex-1 font-ui text-tx text-base font-semibold">
+                Scanned books ({scan.files.length})
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                disabled={busy}
+                onPress={() => setScan(null)}
+                className="py-3 px-2"
+              >
+                <Text className="font-ui text-accent font-semibold">Close</Text>
+              </Pressable>
+            </View>
+            <FlatList
+              style={{ flex: 1 }}
+              className="rounded-xl bg-surface"
+              data={scan.files}
+              keyExtractor={(file) => file.path}
+              ListHeaderComponent={
+                scan.errors.length ? (
+                  <Text className="font-ui text-mu px-4 py-2">{scan.errors.join('\n')}</Text>
+                ) : undefined
+              }
+              ListEmptyComponent={
+                <Text className="font-ui text-mu p-4">
+                  No supported books found in this folder.
+                </Text>
+              }
+              renderItem={({ item, index }) => (
+                <Pressable
+                  accessibilityRole="checkbox"
+                  accessibilityLabel={item.name}
+                  accessibilityState={{ checked: item.selected, disabled: busy }}
+                  disabled={busy}
+                  className="flex-row items-center gap-3 px-4 py-3 border-b border-line"
+                  onPress={() =>
+                    setScan((previous) => {
+                      if (!previous) return previous;
+                      const files = previous.files.slice();
+                      files[index] = { ...files[index], selected: !files[index].selected };
+                      return { ...previous, files };
+                    })
+                  }
+                >
+                  <Icon
+                    name={item.selected ? 'checkbox' : 'square-outline'}
+                    tone={item.selected ? 'accent' : 'muted'}
+                    size={22}
+                  />
+                  <View className="flex-1">
+                    <Text numberOfLines={2} className="font-ui text-tx font-medium">
+                      {item.name}
+                    </Text>
+                    <Text
+                      numberOfLines={1}
+                      ellipsizeMode="middle"
+                      className="font-ui text-mu text-xs"
+                    >
+                      {item.path}
+                    </Text>
+                  </View>
+                  <Text className="font-ui text-mu text-xs uppercase">{item.ext}</Text>
+                </Pressable>
+              )}
+            />
+            <View className="flex-row items-center justify-between gap-2 pt-2">
+              <Text className="font-ui text-mu flex-1">{selected.length} selected</Text>
+              <PrimaryButton
+                label="Add to library"
+                disabled={busy || !selected.length}
+                onPress={() =>
+                  perform('Importing books�', () =>
+                    importFiles(selected.map((file) => ({ uri: file.path, name: file.name }))),
+                  )
+                }
+              />
+            </View>
+          </>
+        ) : run?.length && counts ? (
+          <>
+            <Text className="font-ui text-tx text-base font-semibold">Import results</Text>
+            <Text className="font-ui text-mu text-sm my-2">
+              {counts.added} imported � {counts.duplicate} duplicates � {counts.skipped} skipped �{' '}
+              {counts.failed} failed
+            </Text>
+            <FlatList
+              style={{ flex: 1 }}
+              data={run}
+              keyExtractor={(item, index) => item.uri + index}
+              renderItem={({ item: r }) => (
+                <View className="flex-row items-start gap-2 py-1.5">
+                  <Text className="font-ui text-mu text-[13px] w-20" numberOfLines={1}>
+                    {RESULT_LABEL[r.status]}
                   </Text>
-                ))}
-                {scan.files.map((f, i) => (
-                  <Pressable
-                    key={f.path}
-                    className="flex-row items-center gap-3 py-2"
-                    onPress={() =>
-                      setScan((s) =>
-                        s
-                          ? {
-                              ...s,
-                              files: s.files.map((x, j) =>
-                                j === i ? { ...x, selected: !x.selected } : x
-                              ),
-                            }
-                          : s
-                      )
-                    }>
-                    <View
-                      className="w-5 h-5 rounded border items-center justify-center"
-                      style={{
-                        borderColor: 'rgb(var(--ln))',
-                        backgroundColor: f.selected ? 'rgb(var(--ac))' : 'transparent',
-                      }}>
-                      {f.selected && <Text className="font-ui text-bg text-[12px] font-bold">✓</Text>}
-                    </View>
-                    <View className="flex-1 min-w-0">
-                      <Text numberOfLines={1} className="font-ui text-tx font-medium">
-                        {f.name}
+                  <View className="flex-1 min-w-0">
+                    <Text numberOfLines={1} className="font-ui text-tx text-[13px] font-medium">
+                      {r.name}
+                    </Text>
+                    {!!r.reason && (
+                      <Text numberOfLines={2} className="font-ui text-mu text-[12px]">
+                        {r.reason}
                       </Text>
-                      <Text numberOfLines={1} className="font-ui text-mu text-[13px]">
-                        {f.path}
+                    )}
+                  </View>
+                  {r.status === 'duplicate' && r.documentId && (
+                    <Pressable
+                      onPress={() => router.push(`/reader/${r.documentId}` as never)}
+                      className="px-2 py-1 rounded-full"
+                      style={{ backgroundColor: accent.hexStrong }}
+                    >
+                      <Text
+                        className="font-ui text-[12px] font-semibold"
+                        style={{ color: contrastText(accent.hexStrong) }}>
+                        Open
                       </Text>
-                    </View>
-                    <Text className="font-ui text-mu text-[13px] uppercase">{f.ext}</Text>
-                  </Pressable>
-                ))}
-                {scan.done && scan.files.length > 0 && (
+                    </Pressable>
+                  )}
+                </View>
+              )}
+            />
+            <View className="flex-row flex-wrap gap-2 pt-2">
+              {failedItems.length > 0 && (
+                <PrimaryButton
+                  label="Retry failed"
+                  disabled={busy}
+                  onPress={() => perform('Retrying files�', () => importFiles(failedItems))}
+                />
+              )}
+              <PrimaryButton label="Copy report" ghost onPress={copyReport} />
+              <PrimaryButton label="Done" ghost onPress={() => setRun(null)} />
+            </View>
+          </>
+        ) : (
+          <ScrollView style={{ flex: 1 }}>
+            {effectiveTab === 'scan' ? (
+              <Section
+                title={scanUri ? 'Scan folder' : 'Choose a folder'}
+                description="Scan a folder for TXT, EPUB and PDF files."
+              >
+                <PrimaryButton
+                  label={scanUri ? 'Scan now' : 'Allow access and scan'}
+                  onPress={runScan}
+                  disabled={busy}
+                />
+                {scanUri && (
                   <PrimaryButton
-                    label={`Add ${scan.files.filter((f) => f.selected).length} selected`}
-                    onPress={addScanned}
+                    label="Revoke access"
+                    ghost
+                    onPress={revokeAccess}
                     disabled={busy}
                   />
                 )}
               </Section>
+            ) : (
+              <Section title="Choose files" description="Import from the system file picker.">
+                <PrimaryButton label="Choose files" onPress={pickFiles} disabled={busy} />
+              </Section>
             )}
-          </>
-        ) : (
-          <Section
-            title="Choose files"
-            description="Opens the system file picker. No storage permission needed.">
-            <PrimaryButton label="Choose files" onPress={pickFiles} disabled={busy} />
-          </Section>
+          </ScrollView>
         )}
-
-        {/* Import report: counts + per-file reasons (plan 5.1.1) */}
-        {run && run.length > 0 && counts && (
-          <Section
-            title={`${run.length} file${run.length === 1 ? '' : 's'} — ${counts.added} imported, ${counts.duplicate} duplicates, ${counts.skipped} skipped, ${counts.failed} failed`}>
-            {run.map((r, i) => (
-              <View key={`${r.name}-${i}`} className="flex-row items-start gap-2 py-1.5">
-                <Text className="font-ui text-mu text-[13px] w-20" numberOfLines={1}>
-                  {RESULT_LABEL[r.status]}
-                </Text>
-                <View className="flex-1 min-w-0">
-                  <Text numberOfLines={1} className="font-ui text-tx text-[13px] font-medium">
-                    {r.name}
-                  </Text>
-                  {!!r.reason && (
-                    <Text numberOfLines={2} className="font-ui text-mu text-[12px]">
-                      {r.reason}
-                    </Text>
-                  )}
-                </View>
-                {r.status === 'duplicate' && r.documentId && (
-                  <Pressable
-                    onPress={() => router.push(`/reader/${r.documentId}` as never)}
-                    className="px-2 py-1 rounded-full"
-                    style={{ backgroundColor: 'rgb(var(--acb))' }}>
-                    <Text className="font-ui text-accent text-[12px] font-semibold">Open</Text>
-                  </Pressable>
-                )}
-              </View>
-            ))}
-            <View className="flex-row gap-2 mt-2">
-              {failedItems.length > 0 && (
-                <PrimaryButton label={`Retry failed (${failedItems.length})`} onPress={retryFailed} disabled={busy} />
-              )}
-              <PrimaryButton label="Copy report" ghost onPress={copyReport} />
-            </View>
-          </Section>
-        )}
-      </ScrollView>
+      </View>
     </Screen>
   );
 }

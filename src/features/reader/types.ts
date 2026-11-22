@@ -1,9 +1,6 @@
 import type { ChapterRow } from '@/db/repositories/chapters';
 
-/** A chapter row plus its normalized text loaded from the sandbox. */
-export interface ReaderChapter extends ChapterRow {
-  text: string;
-}
+export type ReaderChapter = ChapterRow;
 
 /** Result of an in-book search (plan 5.6.1). */
 export interface SearchResult {

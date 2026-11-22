@@ -221,31 +221,13 @@ async function readArchiveBytes(uri: string): Promise<Uint8Array> {
 
 const NON_TEXT_ASSETS = /\.(ttf|otf|woff|woff2|eot|mp3|mp4|wav|m4a|webm|avi|mkv)$/i;
 
-export async function importEpub(uri: string, opts: EpubOpts): Promise<ImportedBook> {
-  // Read archive bytes using bounded, memory-efficient native reader
-  const fileBytes = await readArchiveBytes(uri);
+function archivePath(rawKey: string) {
+  return rawKey.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\//, '');
+}
 
-  // Unzip entries, skipping heavy embedded fonts and multimedia unused by the text reader
-  let unzipped: fflate.Unzipped;
-  try {
-    unzipped = fflate.unzipSync(fileBytes, {
-      filter(entry) {
-        return !NON_TEXT_ASSETS.test(entry.name);
-      },
-    });
-  } catch {
-    throw new Error('Failed to unpack EPUB archive. The file may be damaged or not a valid ZIP.');
-  }
-
-  // Normalize path keys
-  const zip: Record<string, Uint8Array> = {};
-  for (const rawKey of Object.keys(unzipped)) {
-    const key = rawKey.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\//, '');
-    zip[key] = unzipped[rawKey];
-  }
-
+function packageInfo(entry: (name: string) => Uint8Array | undefined) {
   // 1. Check for DRM
-  const encryptionBytes = zip['META-INF/encryption.xml'];
+  const encryptionBytes = entry('META-INF/encryption.xml');
   if (encryptionBytes) {
     const encXml = fflate.strFromU8(encryptionBytes);
     // Font obfuscation algorithms are standard and allowed. Other encryption = DRM.
@@ -263,7 +245,7 @@ export async function importEpub(uri: string, opts: EpubOpts): Promise<ImportedB
   }
 
   // 2. Find package document from META-INF/container.xml
-  const containerBytes = zip['META-INF/container.xml'];
+  const containerBytes = entry('META-INF/container.xml');
   if (!containerBytes) {
     throw new Error('Invalid EPUB: META-INF/container.xml is missing.');
   }
@@ -283,7 +265,7 @@ export async function importEpub(uri: string, opts: EpubOpts): Promise<ImportedB
     .replace(/^\.\//, '')
     .replace(/^\//, '');
 
-  const opfBytes = zip[opfPath];
+  const opfBytes = entry(opfPath);
   if (!opfBytes) {
     throw new Error(`Invalid EPUB: package document at "${opfPath}" not found.`);
   }
@@ -303,25 +285,6 @@ export async function importEpub(uri: string, opts: EpubOpts): Promise<ImportedB
     if (m?.['@_property'] === 'rendition:layout' && m?.['#text'] === 'pre-paginated') {
       throw new Error('Fixed-layout (pre-paginated) EPUBs are not supported yet.');
     }
-  }
-
-  // 4. Extract title & author
-  const rawTitle = metadata.title || metadata['dc:title'];
-  let bookTitle = opts.title;
-  if (typeof rawTitle === 'string' && rawTitle.trim()) {
-    bookTitle = rawTitle.trim();
-  } else if (rawTitle && typeof rawTitle === 'object') {
-    const t = rawTitle['#text'] || (Array.isArray(rawTitle) ? rawTitle[0]?.['#text'] || rawTitle[0] : '');
-    if (typeof t === 'string' && t.trim()) bookTitle = t.trim();
-  }
-
-  const rawCreator = metadata.creator || metadata['dc:creator'];
-  let bookAuthor: string | undefined;
-  if (typeof rawCreator === 'string' && rawCreator.trim()) {
-    bookAuthor = rawCreator.trim();
-  } else if (rawCreator && typeof rawCreator === 'object') {
-    const a = rawCreator['#text'] || (Array.isArray(rawCreator) ? rawCreator[0]?.['#text'] || rawCreator[0] : '');
-    if (typeof a === 'string' && a.trim()) bookAuthor = a.trim();
   }
 
   // 5. Parse manifest
@@ -344,7 +307,6 @@ export async function importEpub(uri: string, opts: EpubOpts): Promise<ImportedB
   }
 
   // 6. Find cover image
-  let coverData: Uint8Array | undefined;
   let coverHref: string | undefined;
 
   // EPUB 3 cover-image property
@@ -376,11 +338,64 @@ export async function importEpub(uri: string, opts: EpubOpts): Promise<ImportedB
     }
   }
 
-  if (coverHref) {
-    const resolvedCover = resolvePath(opfDir, coverHref);
-    if (zip[resolvedCover]) {
-      coverData = zip[resolvedCover];
-    }
+  const coverData = coverHref ? entry(resolvePath(opfDir, coverHref)) : undefined;
+  return { xmlParser, opfDir, pkg, metadata, manifestById, coverData };
+}
+
+/** Extract only the package metadata and named cover when repairing an existing book. */
+export async function readEpubCover(uri: string) {
+  const bytes = await readArchiveBytes(uri);
+  const info = packageInfo((name) => {
+    const entries = fflate.unzipSync(bytes, {
+      filter: (entry) => archivePath(entry.name) === name,
+    });
+    return Object.values(entries)[0];
+  });
+  return info.coverData;
+}
+
+export async function importEpub(uri: string, opts: EpubOpts): Promise<ImportedBook> {
+  // Read archive bytes using bounded, memory-efficient native reader
+  const fileBytes = await readArchiveBytes(uri);
+
+  // Unzip entries, skipping heavy embedded fonts and multimedia unused by the text reader
+  let unzipped: fflate.Unzipped;
+  try {
+    unzipped = fflate.unzipSync(fileBytes, {
+      filter(entry) {
+        return !NON_TEXT_ASSETS.test(entry.name);
+      },
+    });
+  } catch {
+    throw new Error('Failed to unpack EPUB archive. The file may be damaged or not a valid ZIP.');
+  }
+
+  // Normalize path keys
+  const zip: Record<string, Uint8Array> = {};
+  for (const rawKey of Object.keys(unzipped)) {
+    const key = archivePath(rawKey);
+    zip[key] = unzipped[rawKey];
+  }
+
+  const { xmlParser, opfDir, pkg, metadata, manifestById, coverData } = packageInfo((name) => zip[name]);
+
+  // 4. Extract title & author
+  const rawTitle = metadata.title || metadata['dc:title'];
+  let bookTitle = opts.title;
+  if (typeof rawTitle === 'string' && rawTitle.trim()) {
+    bookTitle = rawTitle.trim();
+  } else if (rawTitle && typeof rawTitle === 'object') {
+    const t = rawTitle['#text'] || (Array.isArray(rawTitle) ? rawTitle[0]?.['#text'] || rawTitle[0] : '');
+    if (typeof t === 'string' && t.trim()) bookTitle = t.trim();
+  }
+
+  const rawCreator = metadata.creator || metadata['dc:creator'];
+  let bookAuthor: string | undefined;
+  if (typeof rawCreator === 'string' && rawCreator.trim()) {
+    bookAuthor = rawCreator.trim();
+  } else if (rawCreator && typeof rawCreator === 'object') {
+    const a = rawCreator['#text'] || (Array.isArray(rawCreator) ? rawCreator[0]?.['#text'] || rawCreator[0] : '');
+    if (typeof a === 'string' && a.trim()) bookAuthor = a.trim();
   }
 
   // 7. Parse Table of Contents

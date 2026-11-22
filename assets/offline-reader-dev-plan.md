@@ -28,14 +28,14 @@
 
 ---
 
-## Current Status (2026-11-19)
+## Current Status (2026-11-22)
 
 Implementation tracking lives in `development-progress.md`. Compared with this plan, the project is further along in Phase 3 and has some differences:
 
 - **Built and working:** TXT and EPUB import and reading, library (grid/list, filters, order modes), history, import (manual picker and Android folder scan), the categorized settings hub, app themes and fonts, per-book reading style, ask-once prompts, progress save and restore, and the reader screen with the Aa sheet.
 - **Differences from the plan:** styling uses NativeWind v4 with CSS-variable theme tokens; routes live in `src/app/`, shared UI in `src/components/`, theming in `src/theme/`, and settings in `src/features/settings/` (see 3.2). Import stages files through a multi-strategy helper (5.1).
-- **Not built yet:** PDF import (reported unsupported), bookmarks/highlights/notes UI, contents panel, in-book search, chunked rendering (the reader currently renders each chapter in one `ScrollView`), reactive repository reads, unit tests, Google sign-in, and sync. The Supabase SQL is written but not verified against the live project.
-- **Open issues driving this revision:** cover images shown at the wrong size or aspect ratio (5.2.1), folder scan and import missing some EPUB files (5.1.1), and the reader screen features in 5.6.1.
+- **Reader and import updates:** Contents, bookmarks, in-book search, cover normalization and import reports are implemented. Books open at the selected chapter and render a moving window of text chunks. Interrupted imports can be retried, and repeat imports can repair a legacy cover.
+- **Remaining work:** Device performance measurements, paged flow, highlight and note creation, PDF extraction, reactive repository reads, Google sign-in and sync. The Supabase SQL still needs live verification.
 
 ---
 
@@ -575,7 +575,8 @@ Build and validate all of this **before** adding auth or sync. Test with airplan
 - **Two import methods** (the default is the `device.importMethod` setting, `'scan'` or `'manual'`):
   - **Manual import:** the document picker above. Works on Android and iOS and needs no permission.
   - **Device scan (Android only):** ask for storage access, scan for `.epub`, `.txt`, and `.pdf` files, and let the user choose which to add. On Android 11 and later there is generally no blanket "storage permission" that exposes other apps' files (`READ_EXTERNAL_STORAGE` no longer covers them, and "All files access" is restricted by Google Play policy). So "storage access" means the Storage Access Framework folder picker: the user grants one folder (for example Downloads or Documents) and Sirum scans that folder tree. In Expo this is `StorageAccessFramework.requestDirectoryPermissionsAsync()` from `expo-file-system` (check the current docs, since the module is moving between legacy and new APIs). Persist the granted folder URI, handle revoked access, and hide the scan option on iOS, which has no equivalent.
-  - The scan only finds candidates. Each selected file goes through the same import pipeline, and files whose hash already exists are skipped.
+  - Scan results open in a bounded, scrollable list. The selection count and **Add to library** sit below the list and stay visible as it scrolls. The action is disabled when the selection is empty or an operation is in progress.
+  - Scanning shows a spinner. During a batch import the status shows the current filename and its position in the batch. Selected files use the same import pipeline as manually picked files, including duplicate detection and per-file reporting.
   - Permission state is read from the OS at runtime and is never stored as a setting.
 - Later: "Open with" / share-sheet intents so users can send files to the app.
 
@@ -702,7 +703,7 @@ Rendering a whole chapter, let alone a whole book, as one `<Text>` will freeze o
 
 ### 5.6.1 Reader screen layout and features
 
-Reference prototype: `sirum-reader-prototype.html`. Chunked virtualized rendering (above) is a priority, because the current reader renders each chapter in a single `ScrollView`.
+Reference prototype: `sirum-reader-prototype.html`. The scrolled reader now renders a bounded window of chunks around the current passage.
 
 - **Top bar:** back, book title, in-book search, display (Aa), and an overflow menu with **Add bookmark**, **Contents**, and **Settings**.
 - **Bottom bar:** current chapter title, a percentage, and a scrubber. The percentage and scrubber follow `reader.percentageMode` (5.8).
@@ -791,6 +792,12 @@ Reference prototype: `sirum-ui-prototype.html`.
 - **Default library layout** (`device.libraryLayout`): 2 columns (cover with a title and author caption below) or 3 columns (cover with the title overlaid, progress and format badges, and a continue button). These are only starting layouts.
 - **View options:** the filter/sort sheet lets the user switch between list view and grid view with sizes 2×2, 3×3, and 4×4 (that many columns; rows scroll), saved as `device.viewMode` and `device.gridSize`. Cards use the caption style at 2 columns and the overlay style at 3 and 4. Choosing a default layout resets the view to grid at that size.
 - **Display options:** the user can hide the format and progress badges (`device.showBadges`) and the title and author (`device.showDetails`) for a cleaner, cover-only look. List view always shows the title, since a row without one is not usable. Keep an accessibility label on each cover when the title is hidden.
+
+**Library and History list rows**
+
+- Both screens place the cover on the right and book details on the left. Library shows the title, author and date added.
+- History shows the title, author, saved chapter and last-read date and time in the device locale. A numbered chapter label provides a fallback when the chapter has no distinct title.
+- History includes books with a saved reading-progress row, including a saved position at 0%. It opens newest read first using `reading_progress.last_read_at`. Its newest/oldest sort and All, In progress and Finished filters apply only to History.
 
 ### 5.10 Settings
 
@@ -1335,7 +1342,7 @@ Collect real files covering: EPUB 2 and EPUB 3; nested TOC; no TOC; TOC pointing
 | Opening a book marks the document dirty (sync churn, metadata overwrites) | `last_opened_at` is local-only; `touchOpened` never sets `dirty` or `updated_at` |
 | Folder scan or picker silently misses some EPUBs | Case-insensitive name match, content validation, tolerant parser, per-file `ImportReport` and `import_log` (5.1.1) |
 | Covers drawn cropped or stretched | Normalize at import, store dimensions, and fit by ratio (5.2.1) |
-| Reader renders a whole chapter in one `ScrollView` (current state) | Chunked virtualized list (5.6) before testing large books |
+| Large chapters exceed the device rendering budget | Profile the windowed reader (5.6) on low-end phones |
 | Per-book style rows left behind after a book is deleted | Purge `reader.book.<documentId>` locally on delete; the rows are tiny |
 | Expecting a blanket "storage permission" to expose all files on Android | Offer manual import plus a folder-based scan (Storage Access Framework); hide scan on iOS (5.1) |
 | Clock skew breaks last-write-wins | Server-assigned cursor; clamp future timestamps; consider version counters |
@@ -1375,8 +1382,8 @@ Collect real files covering: EPUB 2 and EPUB 3; nested TOC; no TOC; TOC pointing
 | **M1** | Project scaffold | 🟡 Partial | Runs in Expo Go and Supabase is linked. CI is not set up. |
 | **M2** | Local data layer | 🟡 Partial | Migrations and repositories done. Reactive reads are minimal and there are no unit tests yet. |
 | **M3** | Text model and TXT slice | ✅ Done | Add position-math and normalization tests. |
-| **M4** | **EPUB reader (primary)** | 🟢 Advanced | Import, covers, TOC, library, settings, per-book style, and progress are done. Open: cover size and aspect fix (5.2.1), scan and import reliability (5.1.1), chunked rendering (5.6), golden-file tests. |
-| **M4b** | **Reader screen parity** (new) | ⬜ Next | Contents panel (Contents, Annotations, Bookmarks), display popup, in-book search with history, and scrubber (5.6.1). Paged flow after scrolled. |
+| **M4** | **EPUB reader (primary)** | 🟢 Advanced | Import, covers, TOC, library, settings, per-book style, and progress are done. Windowed rendering, import recovery and legacy cover repair implemented. Device profiling and extraction golden files remain. |
+| **M4b** | **Reader screen parity** | Partial | Contents panel, display popup, incremental search and scrubber implemented. Paged flow remains. |
 | **M5** | PDF and annotations | ⬜ Not started | pdf.js extraction spike; highlight and note UI and storage. |
 | **M6** | Backend | 🟡 Partial | SQL is written. Verify RLS, triggers, and the cross-user test against the live project. |
 | **M7** | Google sign-in | ⬜ Not started | EAS development build, sign in and out, optional-auth flows. |

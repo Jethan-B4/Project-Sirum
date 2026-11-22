@@ -1,7 +1,7 @@
 import { Image } from 'expo-image';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
+import { AppState, Modal, Pressable, Text, View, useWindowDimensions } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import Slider from '@react-native-community/slider';
 import * as Brightness from 'expo-brightness';
@@ -22,10 +22,17 @@ import {
   SettingKeys,
   type ReadingStyle,
 } from '@/lib/settingsKeys';
-import { positionFromChapterOffset, positionFromOffset } from '@/text/position';
+import { contrastText } from '@/lib/color';
+import { chunkChapter } from '@/text/chunk';
+import { useAppTheme } from '@/theme/ThemeProvider';
+import { ThemePalettes } from '@/theme/palette';
+import { bookPercent } from '@/text/position';
+import { ChunkedChapter } from './ChunkedChapter';
+import type { ProgressInput } from '@/db/repositories/progress';
 import { ContentsPanel } from './ContentsPanel';
 import { DisplayPopup } from './DisplayPopup';
 import { readingFontFamily, BASE_FONT_SIZE } from './ReadingStyleEditor';
+import { resumePosition } from './resume';
 import { SearchOverlay } from './SearchOverlay';
 import type { ReaderChapter, SearchResult } from './types';
 import type { BookmarkRow } from '@/db/repositories/bookmarks';
@@ -36,10 +43,15 @@ type Overlay = 'none' | 'menu' | 'panel' | 'display' | 'search';
 
 export default function ReaderScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  return <BookReader key={id} id={id} />;
+}
+
+function BookReader({ id }: { id: string }) {
   const router = useRouter();
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const { get, getJson, setJson, has, set, remove } = useSettings();
   const { toast } = useChrome();
+  const { accent, name: themeName } = useAppTheme();
   useKeepAwake();
 
   const percentageMode = get(SettingKeys.readerPercentageMode);
@@ -77,266 +89,130 @@ export default function ReaderScreen() {
   const hasOverride = !!bookOverride && Object.keys(bookOverride).length > 0;
   const style: ReadingStyle = { ...defaultStyle, ...(bookOverride ?? {}) };
 
-  const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
-  const metrics = useRef({ y: 0, viewH: 0, contentH: 0 });
-  const restored = useRef(false);
-  const pendingWrite = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingFraction = useRef<number | null>(null); // fraction to scroll to after chapter/layout
-  const scrubbing = useRef(false);
-  const didJump = useRef(false); // user navigated before restore resolved
+  const [loaded, setLoaded] = useState<{ index: number; text: string } | null>(null);
+  const [navigationRevision, setNavigationRevision] = useState(0);
+  const [ready, setReady] = useState(false);
+  const activeText = loaded?.index === chIdx ? loaded.text : null;
+  const chunks = useMemo(() => chunkChapter(chIdx, activeText ?? '', 0), [chIdx, activeText]);
+  const ch = chs[chIdx];
+  const charCount = doc?.char_count ?? 0;
+  const pending = useRef<ProgressInput | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const lastOffset = useRef(0);
+  const flush = useCallback(() => {
+    clearTimeout(timer.current);
+    const value = pending.current;
+    if (value) {
+      pending.current = null;
+      void progressRepo.upsert(id, value).catch(() => toast('Reading position could not be saved'));
+    }
+  }, [id, toast]);
 
-  // --- Load document + chapters ---------------------------------------------
+  useFocusEffect(useCallback(() => flush, [flush]));
+
   useEffect(() => {
-    if (!id) return;
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') flush();
+    });
+    return () => { subscription.remove(); flush(); };
+  }, [flush]);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        const d = await documents.getById(id);
-        if (!d || cancelled) return;
-        setDoc(d);
-        const rows = await chaptersRepo.list(id);
-        const loaded: ReaderChapter[] = [];
-        for (const row of rows) {
-          const padded = String(row.chapter_index).padStart(4, '0');
-          const file = `${d.text_dir ?? ''}/${padded}.txt`;
-          let text = '';
-          try {
-            text = await FileSystem.readAsStringAsync(file);
-          } catch {
-            /* chapter file missing — render title only */
-          }
-          loaded.push({ ...row, text });
-        }
-        if (cancelled) return;
-        setChs(loaded);
-        const [bm, hl] = await Promise.all([
-          bookmarksRepo.list(id).catch(() => [] as BookmarkRow[]),
-          highlightsRepo.list(id).catch(() => [] as HighlightRow[]),
-        ]);
-        if (!cancelled) {
-          setBms(bm);
-          setHls(hl);
-        }
-      } catch (e) {
-        if (!cancelled) setLoadError(e instanceof Error ? e.message : 'Failed to open book');
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+      const [d, rows, saved] = await Promise.all([
+        documents.getById(id), chaptersRepo.list(id), progressRepo.get(id),
+      ]);
+      if (cancelled) return;
+      if (!d) throw new Error('Book could not be found.');
+      const { row, index, offset } = resumePosition(rows, saved);
+      lastOffset.current = (row?.start_offset ?? 0) + offset;
+      setFrac(row?.char_count ? offset / row.char_count : 0);
+      setChIdx(index);
+      setChs(rows);
+      setDoc(d);
+      setReady(true);
+      const [bm, hl] = await Promise.all([bookmarksRepo.list(id).catch(() => []), highlightsRepo.list(id).catch(() => [])]);
+      if (!cancelled) { setBms(bm); setHls(hl); }
+    })().catch((e) => { if (!cancelled) setLoadError(String(e)); });
+    return () => { cancelled = true; };
   }, [id]);
 
-  const charCount = doc?.char_count ?? 0;
-  const ch = chs[chIdx];
+  const readChapter = useCallback((index: number) => {
+    const file = String(index).padStart(4, '0') + '.txt';
+    return FileSystem.readAsStringAsync(doc?.text_dir + '/' + file);
+  }, [doc?.text_dir]);
 
-  // --- Progress persistence ---------------------------------------------------
-  const positionChapters = useMemo(
-    () =>
-      chs.map((c) => ({
-        index: c.chapter_index,
-        title: c.title ?? '',
-        startOffset: c.start_offset,
-        charCount: c.char_count,
-        text: c.text,
-      })),
-    [chs]
-  );
-
-  /** Current position derived from chapter index + scroll fraction. */
-  const currentPosition = useCallback(
-    (fraction: number) => {
-      if (!ch) return null;
-      const chapterCharOffset = Math.round(
-        Math.min(1, Math.max(0, fraction)) * ch.char_count
-      );
-      return positionFromChapterOffset(chIdx, chapterCharOffset, positionChapters, charCount);
-    },
-    [ch, chIdx, positionChapters, charCount]
-  );
-
-  const saveProgress = useCallback(
-    async (fraction: number) => {
-      if (!doc || charCount <= 0) return;
-      const pos = currentPosition(fraction);
-      if (!pos) return;
-      await progressRepo.upsert(doc.id, {
-        charOffset: pos.charOffset,
-        chapterIndex: pos.chapterIndex,
-        chapterCharOffset: pos.chapterCharOffset,
-        percent: pos.percent,
-        snippet: pos.snippet,
-      });
-    },
-    [doc, charCount, currentPosition]
-  );
-
-  const scheduleSave = useCallback(
-    (fraction: number) => {
-      if (pendingWrite.current) clearTimeout(pendingWrite.current);
-      pendingWrite.current = setTimeout(() => {
-        saveProgress(fraction).catch(() => {});
-      }, 2000);
-    },
-    [saveProgress]
-  );
-
-  // Flush pending progress write on unmount.
-  useEffect(
-    () => () => {
-      if (pendingWrite.current) {
-        clearTimeout(pendingWrite.current);
-        const m = metrics.current;
-        const scrollable = m.contentH - m.viewH;
-        if (scrollable > 0 && ch) {
-          saveProgress(m.y / scrollable).catch(() => {});
-        }
-      }
-    },
-    [saveProgress, ch]
-  );
-
-  const onScroll = useCallback(
-    (e: {
-      nativeEvent: {
-        contentOffset: { y: number };
-        layoutMeasurement: { height: number };
-        contentSize: { height: number };
-      };
-    }) => {
-      const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
-      metrics.current = {
-        y: contentOffset.y,
-        viewH: layoutMeasurement.height,
-        contentH: contentSize.height,
-      };
-      const scrollable = contentSize.height - layoutMeasurement.height;
-      const f = scrollable > 0 ? contentOffset.y / scrollable : 0;
-      setFrac(f);
-      if (scrollable > 0 && restored.current && !scrubbing.current) {
-        scheduleSave(f);
-      }
-    },
-    [scheduleSave]
-  );
-
-  /** Scroll to a 0–1 fraction of the current chapter once layout is known. */
-  const applyPendingFraction = useCallback(() => {
-    const f = pendingFraction.current;
-    if (f == null) return;
-    const m = metrics.current;
-    const scrollable = m.contentH - m.viewH;
-    if (scrollable <= 0) return;
-    pendingFraction.current = null;
-    scrollRef.current?.scrollTo({ y: f * scrollable, animated: false });
-    setFrac(f);
-  }, []);
-
-  // Restore the saved position once, after chapters + layout are ready.
   useEffect(() => {
-    if (!doc || chs.length === 0 || restored.current) return;
-    progressRepo
-      .get(doc.id)
-      .then((p) => {
-        restored.current = true;
-        // A user-initiated jump while the progress row was loading wins.
-        if (didJump.current || !p || p.char_offset <= 0) return;
-        const pos = positionFromOffset(p.char_offset, positionChapters, charCount);
-        const target = chs[pos.chapterIndex];
-        if (!target) return;
-        const f =
-          target.char_count > 0 ? pos.chapterCharOffset / target.char_count : 0;
-        pendingFraction.current = f;
-        if (pos.chapterIndex !== chIdx) setChIdx(pos.chapterIndex);
-      })
-      .catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, chs.length]);
+    if (!ch) return;
+    let cancelled = false;
+    readChapter(ch.chapter_index).then((text) => {
+      if (!cancelled) setLoaded({ index: chIdx, text });
+    }).catch(() => {
+      if (!cancelled) setLoadError('This chapter could not be read from device storage.');
+    });
+    return () => { cancelled = true; };
+  }, [ch, chIdx, readChapter]);
 
-  // Apply pending scroll fraction whenever content size changes (chapter switch).
-  const onContentSize = useCallback(
-    (_w: number, h: number) => {
-      metrics.current.contentH = h;
-      applyPendingFraction();
-    },
-    [applyPendingFraction]
-  );
-  const onLayout = useCallback(
-    (e: { nativeEvent: { layout: { height: number } } }) => {
-      metrics.current.viewH = e.nativeEvent.layout.height;
-      applyPendingFraction();
-    },
-    [applyPendingFraction]
-  );
+  const readForSearch = useCallback((index: number) =>
+    loaded?.index === index ? Promise.resolve(loaded.text) : readChapter(index),
+  [loaded, readChapter]);
 
-  // --- Chapter navigation -------------------------------------------------------
-  const jumpToChapter = useCallback(
-    (index: number, fraction = 0) => {
-      if (chs.length === 0) return;
-      const clamped = Math.min(Math.max(0, index), chs.length - 1);
-      const f = Math.min(1, Math.max(0, fraction));
-      didJump.current = true;
-      restored.current = true; // position jumps always count as real movement
-      setFrac(f);
-      if (clamped === chIdx) {
-        // Same chapter: scroll directly when metrics are known.
-        const m = metrics.current;
-        const scrollable = m.contentH - m.viewH;
-        if (scrollable > 0) {
-          scrollRef.current?.scrollTo({ y: f * scrollable, animated: false });
-        } else {
-          pendingFraction.current = f;
-        }
-      } else {
-        // Chapter change remounts the ScrollView (key={chIdx}); the pending
-        // fraction is applied from onContentSizeChange.
-        pendingFraction.current = f;
-        metrics.current = { y: 0, viewH: metrics.current.viewH, contentH: 0 };
-        setChIdx(clamped);
-      }
-    },
-    [chs.length, chIdx]
-  );
+  const recordPosition = useCallback((index: number, offset: number) => {
+    const row = chs[index];
+    const global = row.start_offset + offset;
+    setFrac(row.char_count ? offset / row.char_count : 0);
+    if (global === lastOffset.current && index === chIdx) return;
+    lastOffset.current = global;
+    pending.current = {
+      charOffset: global, chapterIndex: index, chapterCharOffset: offset,
+      percent: bookPercent(global, charCount),
+      snippet: loaded?.index === index ? loaded.text.slice(offset, offset + 100) : undefined,
+    };
+    clearTimeout(timer.current);
+    timer.current = setTimeout(flush, 750);
+  }, [chs, chIdx, loaded, charCount, flush]);
 
-  const jumpToOffset = useCallback(
-    (offset: number) => {
-      const pos = positionFromOffset(offset, positionChapters, charCount);
-      const target = chs[pos.chapterIndex];
-      const f = target && target.char_count > 0 ? pos.chapterCharOffset / target.char_count : 0;
-      jumpToChapter(pos.chapterIndex, f);
-    },
-    [positionChapters, charCount, chs, jumpToChapter]
-  );
+  const jumpToChapter = useCallback((index: number, fraction = 0) => {
+    const row = chs[index];
+    if (!row) return;
+    const offset = Math.round(row.char_count * Math.max(0, Math.min(1, fraction)));
+    recordPosition(index, offset);
+    setLoadError(null);
+    setChIdx(index);
+    setNavigationRevision((revision) => revision + 1);
+  }, [chs, recordPosition]);
 
-  const onSearchResult = useCallback(
-    (r: SearchResult) => {
-      const target = chs[r.chapterIndex];
-      const f =
-        target && target.char_count > 0 ? r.chapterOffset / target.char_count : 0;
-      jumpToChapter(r.chapterIndex, f);
-      setOverlay('none');
-    },
-    [chs, jumpToChapter]
-  );
+  const jumpToOffset = (offset: number) => {
+    const index = Math.max(0, chs.findLastIndex((row) => row.start_offset <= offset));
+    const row = chs[index];
+    if (row) jumpToChapter(index, row.char_count ? (offset - row.start_offset) / row.char_count : 0);
+  };
+
+  const onSearchResult = (result: SearchResult) => {
+    const row = chs[result.chapterIndex];
+    jumpToChapter(result.chapterIndex, result.chapterOffset / (row.char_count || 1));
+    setOverlay('none');
+  };
 
   // --- Bookmarks -----------------------------------------------------------------
   const addBookmark = useCallback(async () => {
     if (!doc || !ch || charCount <= 0) return;
-    const pos = currentPosition(frac);
-    if (!pos) return;
-    const local = pos.chapterCharOffset;
-    const snippet = ch.text.slice(Math.max(0, local - 40), local + 60).replace(/\s+/g, ' ').trim();
+    if (activeText === null) return;
+    const local = Math.round(frac * ch.char_count);
+    const snippet = activeText.slice(Math.max(0, local - 40), local + 60).replace(/\s+/g, ' ').trim();
     await bookmarksRepo.create({
       id: '',
       document_id: doc.id,
-      char_offset: pos.charOffset,
-      chapter_index: pos.chapterIndex,
-      chapter_char_offset: pos.chapterCharOffset,
+      char_offset: ch.start_offset + local,
+      chapter_index: chIdx,
+      chapter_char_offset: local,
       label: null,
       snippet: snippet || null,
     });
     setBms(await bookmarksRepo.list(doc.id));
     toast('Bookmark added');
-  }, [doc, ch, charCount, frac, currentPosition, toast]);
+  }, [doc, ch, charCount, frac, chIdx, activeText, toast]);
 
   const deleteBookmark = useCallback(
     async (bid: string) => {
@@ -411,14 +287,13 @@ export default function ReaderScreen() {
   // --- Progress label ---------------------------------------------------------------
   const label = useMemo(() => {
     if (!doc || charCount <= 0 || !ch) return '';
-    const pos = currentPosition(frac);
-    if (!pos) return '';
+    const local = Math.round(frac * ch.char_count);
     if (percentageMode === 'chapter' && chs.length > 1 && ch.char_count > 0) {
-      const chPct = Math.round((pos.chapterCharOffset / ch.char_count) * 100);
+      const chPct = Math.round((local / ch.char_count) * 100);
       return `Ch. ${chIdx + 1} of ${chs.length} · ${chPct}%`;
     }
-    return `${Math.round(pos.percent * 100)}% of book`;
-  }, [doc, charCount, ch, chs.length, chIdx, percentageMode, frac, currentPosition]);
+    return `${Math.round(bookPercent(ch.start_offset + local, charCount) * 100)}% of book`;
+  }, [doc, charCount, ch, chs.length, chIdx, percentageMode, frac]);
 
   // Ask-once progress display prompt (plan 5.8): multi-chapter docs only.
   const pmPrompt =
@@ -428,7 +303,7 @@ export default function ReaderScreen() {
   const fontSize = BASE_FONT_SIZE * (style.size / 100);
   const marginH = (winWidth * style.mar) / 100;
 
-  const paragraphs = useMemo(() => (ch ? ch.text.split('\n') : []), [ch]);
+
 
   return (
     <Screen showNav={false}>
@@ -497,29 +372,31 @@ export default function ReaderScreen() {
           <View className="flex-1 items-center justify-center px-8">
             <Text className="font-ui text-mu text-center">{loadError}</Text>
           </View>
-        ) : chs.length === 0 ? (
+        ) : ready && chs.length === 0 ? (
           <View className="flex-1 items-center justify-center px-8">
             <Text className="font-ui text-mu text-center">No readable text found.</Text>
           </View>
-        ) : !ch ? (
+        ) : !ch || activeText === null ? (
           <View className="flex-1 items-center justify-center px-8">
             <Text className="font-ui text-mu text-center">Loading…</Text>
           </View>
         ) : (
           <>
-            <ScrollView
-              key={chIdx}
-              ref={scrollRef}
-              className="flex-1"
-              contentContainerStyle={{
-                paddingHorizontal: marginH,
-                paddingTop: 8,
-                paddingBottom: 24,
-              }}
-              onScroll={onScroll}
-              scrollEventThrottle={100}
-              onLayout={onLayout}
-              onContentSizeChange={onContentSize}>
+            <ChunkedChapter
+              key={[chIdx, navigationRevision, winWidth, style.fam, style.size, style.lh,
+                style.wt, style.mar, style.align].join('/')}
+              chunks={chunks}
+              length={activeText.length}
+              initialOffset={Math.round(frac * ch.char_count)}
+              margin={marginH}
+              textStyle={{ color: style.tx, fontFamily, fontWeight: String(style.wt) as '400',
+                fontSize, lineHeight: Math.round(fontSize * style.lh), textAlign: style.align }}
+              onMove={(offset) => recordPosition(chIdx, offset)}
+              footer={chIdx + 1 < chs.length && (
+                <Pressable accessibilityRole="button" onPress={() => jumpToChapter(chIdx + 1)} className="py-5">
+                  <Text style={{ color: style.tx }}>Next chapter</Text>
+                </Pressable>
+              )}>
               {/* Book cover landing page (if book has cover art and on chapter 0) */}
               {chIdx === 0 && doc?.cover_uri ? (
                 <View
@@ -616,26 +493,7 @@ export default function ReaderScreen() {
                   {ch.title}
                 </Text>
               ) : null}
-              {paragraphs.map((para, i) =>
-                para.length === 0 ? (
-                  <View key={i} className="h-3" />
-                ) : (
-                  <Text
-                    key={i}
-                    className="mb-4"
-                    style={{
-                      color: style.tx,
-                      fontFamily,
-                      fontWeight: String(style.wt) as '400',
-                      fontSize,
-                      lineHeight: Math.round(fontSize * style.lh),
-                      textAlign: style.align === 'justify' ? 'justify' : 'left',
-                    }}>
-                    {para}
-                  </Text>
-                )
-              )}
-            </ScrollView>
+            </ChunkedChapter>
 
             {/* Bottom bar: chapter title, percent, scrubber (prototype `.bot`) */}
             <View className="bg-surface px-5 pt-3.5 pb-4">
@@ -654,21 +512,11 @@ export default function ReaderScreen() {
                 minimumValue={0}
                 maximumValue={100}
                 value={Math.round(frac * 100)}
-                onValueChange={(v) => {
-                  const f = v / 100;
-                  const m = metrics.current;
-                  const scrollable = m.contentH - m.viewH;
-                  if (scrollable > 0) {
-                    scrubbing.current = true;
-                    scrollRef.current?.scrollTo({ y: f * scrollable, animated: false });
-                    scrubbing.current = false;
-                  }
-                  setFrac(f);
-                }}
-                onSlidingComplete={(v) => scheduleSave(v / 100)}
-                minimumTrackTintColor="rgb(var(--ac))"
-                maximumTrackTintColor="rgb(var(--sf2))"
-                thumbTintColor="rgb(var(--ac))"
+                onValueChange={(value) => setFrac(value / 100)}
+                onSlidingComplete={(value) => jumpToChapter(chIdx, value / 100)}
+                minimumTrackTintColor={accent.hex}
+                maximumTrackTintColor={'rgb(' + ThemePalettes[themeName].sf2.replace(/ /g, ',') + ')'}
+                thumbTintColor={accent.hex}
               />
               <Text className="font-ui text-mu text-[12px] text-center mt-0.5" numberOfLines={1}>
                 {label}
@@ -687,6 +535,7 @@ export default function ReaderScreen() {
         currentIndex={chIdx}
         bookmarks={bms}
         highlights={hls}
+        readChapter={readForSearch}
         onJumpChapter={jumpToChapter}
         onJumpOffset={jumpToOffset}
         onDeleteBookmark={deleteBookmark}
@@ -712,6 +561,7 @@ export default function ReaderScreen() {
         visible={overlay === 'search'}
         onClose={() => setOverlay('none')}
         chapters={chs}
+        readChapter={readForSearch}
         history={searchHistory}
         onAddHistory={addHistory}
         onClearHistory={clearHistory}
@@ -733,9 +583,9 @@ export default function ReaderScreen() {
               </Pressable>
               <Pressable
                 className="px-4 py-2 rounded-full"
-                style={{ backgroundColor: 'rgb(var(--ac))' }}
+                style={{ backgroundColor: accent.hex }}
                 onPress={() => { setPmDismissed(true); void set(SettingKeys.readerPercentageMode, 'book'); }}>
-                <Text className="font-ui text-bg font-semibold">Whole book</Text>
+                <Text className="font-ui font-semibold" style={{ color: contrastText(accent.hex) }}>Whole book</Text>
               </Pressable>
             </View>
           </View>

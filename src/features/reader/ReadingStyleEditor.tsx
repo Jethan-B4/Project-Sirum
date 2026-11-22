@@ -8,6 +8,7 @@ import {
   SegmentedControl,
   SliderRow,
 } from '@/components/ui/controls';
+import { contrastText } from '@/lib/color';
 import type { ReadingStyle } from '@/lib/settingsKeys';
 
 /** Presets from the prototype: Dark / Light / Sepia. */
@@ -127,7 +128,7 @@ export function ReadingStyleEditor({
         label="Background color"
         value={value.bg}
         options={BG_SWATCHES}
-        onChange={(bg) => onChange({ bg })}
+        onChange={(bg) => onChange({ bg, tx: contrastText(bg) })}
       />
       <ColorSwatches
         label="Text color"

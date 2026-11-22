@@ -1,3 +1,4 @@
+import type { SQLiteDatabase } from 'expo-sqlite';
 import { getDb } from '../client';
 
 export interface ChapterRow {
@@ -18,13 +19,18 @@ export const chapters = {
     );
   },
 
+  async hasIndex(documentId: string): Promise<boolean> {
+    const db = await getDb();
+    return !!await db.getFirstAsync('SELECT 1 FROM document_chapters WHERE document_id = ? LIMIT 1', [documentId]);
+  },
+
   /** Replace all chapters for a document in a single transaction. */
   async replaceForDocument(
     documentId: string,
-    rows: Omit<ChapterRow, 'document_id'>[]
+    rows: Omit<ChapterRow, 'document_id'>[],
+    transaction?: SQLiteDatabase
   ): Promise<void> {
-    const db = await getDb();
-    await db.withTransactionAsync(async () => {
+    const replace = async (db: SQLiteDatabase) => {
       await db.runAsync('DELETE FROM document_chapters WHERE document_id = ?', [documentId]);
 
       for (const row of rows) {
@@ -41,6 +47,9 @@ export const chapters = {
           ]
         );
       }
-    });
+    };
+    if (transaction) return replace(transaction);
+    const db = await getDb();
+    await db.withExclusiveTransactionAsync(replace);
   },
 };

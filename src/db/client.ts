@@ -1,3 +1,4 @@
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Crypto from 'expo-crypto';
 import * as SQLite from 'expo-sqlite';
 import { migrations } from './migrations';
@@ -24,7 +25,22 @@ async function init(): Promise<SQLite.SQLiteDatabase> {
   await db.execAsync('PRAGMA foreign_keys = ON;');
   await runMigrations(db);
   await ensureDeviceId(db);
+  await recoverInterruptedImports(db).catch((error) => console.warn('Import recovery deferred', error));
   return db;
+}
+
+async function recoverInterruptedImports(db: SQLite.SQLiteDatabase) {
+  const root = FileSystem.documentDirectory + 'books/';
+  if (!(await FileSystem.getInfoAsync(root)).exists) return;
+  const entries = await FileSystem.readDirectoryAsync(root);
+  const owners = await db.getAllAsync<{ id: string }>('SELECT id FROM documents');
+  const committed = new Set(owners.map((row) => row.id));
+  const importId = /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i;
+  for (const name of entries) {
+    if (importId.test(name) && !committed.has(name)) {
+      await FileSystem.deleteAsync(root + name, { idempotent: true });
+    }
+  }
 }
 
 async function runMigrations(db: SQLite.SQLiteDatabase): Promise<void> {

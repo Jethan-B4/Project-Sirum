@@ -230,54 +230,43 @@ export function BookCard({ book, gridSize, showBadges, showDetails, onPress }: C
   );
 }
 
-export function BookRow({ book, onPress }: { book: LibraryDocument; onPress: (b: LibraryDocument) => void }) {
+const addedDate = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+const readDate = new Intl.DateTimeFormat(undefined, {
+  month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+});
+
+export function BookRow({ book, position, onPress }: {
+  book: LibraryDocument;
+  position?: string;
+  onPress: (book: LibraryDocument) => void;
+}) {
   const p = pct(book);
-  const isLocal = book.local_uri != null;
+  const timestamp = Date.parse((position ? book.last_read_at : book.created_at) ?? '');
+  const date = Number.isFinite(timestamp)
+    ? (position ? readDate : addedDate).format(timestamp)
+    : 'Unknown date';
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={book.title}
       onPress={() => onPress(book)}
-      style={({ pressed }) => [styles.rowWrapper, { opacity: pressed ? 0.82 : 1 }]}>
-      <View style={styles.rowCoverFrame}>
-        <BookCover
-          title={book.title}
-          author={book.author}
-          coverUri={book.cover_uri}
-          coverWidth={book.cover_width}
-          coverHeight={book.cover_height}
-          width={52}
-          height={78}
-          radius={6}
-          compact
-        />
-      </View>
-
-      <View style={styles.rowContent}>
-        <View style={styles.rowTitleHeader}>
-          <Text numberOfLines={1} style={styles.rowTitle}>
-            {book.title}
-          </Text>
-          <View style={styles.rowFormatBadge}>
-            <Text style={styles.rowFormatText}>{book.format.toUpperCase()}</Text>
+      className="mb-2 flex-row items-center gap-4 rounded-xl border border-line bg-surface p-3.5 active:opacity-80">
+      <View className="flex-1 min-w-0">
+        <Text numberOfLines={2} className="font-ui text-tx text-base font-semibold">{book.title}</Text>
+        <Text numberOfLines={1} className="font-ui text-mu text-sm mt-0.5">{book.author?.trim() || 'Unknown author'}</Text>
+        {position && <Text numberOfLines={2} className="font-ui text-tx text-sm mt-2">{position}</Text>}
+        <Text className="font-ui text-mu text-[12px] mt-1">{position ? 'Last read' : 'Added'} {date}</Text>
+        {book.local_uri == null && <Text className="font-ui text-mu text-xs">Not on this device</Text>}
+        <View className="mt-2 flex-row items-center gap-2">
+          <Text className="font-ui text-mu text-[11px] font-semibold">{book.format.toUpperCase()}</Text>
+          <View className="h-1 flex-1 max-w-[100px] overflow-hidden rounded-full bg-surface-2">
+            <View className="h-full rounded-full bg-accent" style={{ width: `${p}%` }} />
           </View>
-        </View>
-
-        <Text numberOfLines={1} style={styles.rowAuthor}>
-          {book.author ?? 'Unknown Author'}
-          {!isLocal && ' · Not on this device'}
-        </Text>
-
-        <View style={styles.rowBottomRow}>
-          <View style={styles.rowProgressTrack}>
-            <View style={[styles.rowProgressBar, { width: `${p}%` }]} />
-          </View>
-          <Text style={styles.rowProgressLabel}>{p}%</Text>
+          <Text className="font-ui text-mu text-xs">{p}%</Text>
         </View>
       </View>
-
-      <Icon name="chevron-forward" size={18} tone="muted" />
+      <BookCover key={book.cover_uri} title={book.title} author={book.author} coverUri={book.cover_uri}
+        width={64} height={96} radius={6} compact />
     </Pressable>
   );
 }
@@ -467,85 +456,5 @@ const styles = StyleSheet.create({
   cardAuthor: {
     fontSize: 12,
     marginTop: 2,
-  },
-  rowWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgb(var(--surface))',
-    borderRadius: 12,
-    padding: 10,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: 'rgb(var(--ln))',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 1,
-  },
-  rowCoverFrame: {
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.18,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  rowContent: {
-    flex: 1,
-    marginLeft: 12,
-    marginRight: 8,
-  },
-  rowTitleHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 6,
-  },
-  rowTitle: {
-    flex: 1,
-    color: 'rgb(var(--tx))',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  rowFormatBadge: {
-    backgroundColor: 'rgb(var(--surface-2))',
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 4,
-  },
-  rowFormatText: {
-    color: 'rgb(var(--mu))',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  rowAuthor: {
-    color: 'rgb(var(--mu))',
-    fontSize: 13,
-    marginTop: 2,
-  },
-  rowBottomRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 8,
-  },
-  rowProgressTrack: {
-    flex: 1,
-    height: 4,
-    backgroundColor: 'rgb(var(--surface-2))',
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  rowProgressBar: {
-    height: '100%',
-    backgroundColor: 'rgb(var(--ac))',
-    borderRadius: 2,
-  },
-  rowProgressLabel: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: 'rgb(var(--mu))',
-    minWidth: 32,
-    textAlign: 'right',
   },
 });

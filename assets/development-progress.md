@@ -2,7 +2,7 @@
 
 Tracks implementation status against `offline-reader-dev-plan.md`. Update this file as milestones complete.
 
-**Last updated:** 2026-11-19
+**Last updated:** 2026-11-22
 
 ---
 
@@ -23,6 +23,21 @@ Tracks implementation status against `offline-reader-dev-plan.md`. Update this f
 Legend: ✅ done · 🟢 advanced / nearly done · 🟡 partial · ⬜ not started
 
 ---
+
+## Library, reading history and scan results (2026-11-22)
+
+- Library and History share a list row with the cover on the right. Library shows title, author and date added on the left. History shows title, author, saved chapter and the local date and time of the last read.
+- History opens with the most recently read book first. Its sort and reading-status filters are independent of Library settings. The SQLite query joins saved progress to the chapter index and keeps entries whose chapter title is unavailable.
+- Android scan results scroll independently above a fixed selection count and **Add to library** button. A spinner indicates an active scan or import. During import, the status identifies the current file and its position in the batch.
+- Verification passed for lint, TypeScript and Android and iOS bundle exports. The SQLite check covered last-read ordering, saved progress at 0%, missing chapters and deleted records. A simulated 512-file scan exercised deselection, a 511-file import, duplicate taps, activity indicators and the final report. Physical-device layout verification remains open.
+
+## Large-book reading and import recovery (2026-11-22)
+
+- Opening a book loads its chapter index and saved position, then reads the selected chapter. The scrolled reader mounts up to seven text chunks and uses native line measurements for resume, bookmarks and search jumps. Reaching a chapter's end offers a next-chapter action.
+- Progress writes follow user navigation and scrolling. Pending movement is flushed on background and exit. Search scans on demand, publishes partial results, skips missing chapter files and cancels superseded queries.
+- A single SQLite transaction publishes the document and chapter index after the chapter files have been written. Startup recovery removes abandoned import directories. Re-import can restore the index of a document interrupted under the older importer.
+- A matching EPUB can restore missing cover dimensions or artwork on the existing library entry. Repair extracts the package metadata and cover without inflating chapter text.
+- Verification includes the reader regression suite (`node --test scripts/reader-regressions.test.mjs` with Node 24), a SQLite failure-and-retry exercise with simulated native adapters, TypeScript, lint and Android/iOS bundle exports. Native gesture behavior, launch latency and memory on low-end phones remain to be measured. A single-chapter TXT still loads that chapter's entire source text.
 
 ## Recent Updates (2026-11-21)
 
@@ -139,6 +154,11 @@ Legend: ✅ done · 🟢 advanced / nearly done · 🟡 partial · ⬜ not start
 - **Cover fit:** covers with unknown dimensions (pre-003 imports) now default to `contain` (show whole art over blurred backdrop) instead of crop-fill; only near-2:3 art or `device.coverFit='crop'` crops. Re-importing a book normalizes its cover and stores dimensions.
 - `ImageBackground` deprecation warning is **not from app code** — no `src/` file uses it; it comes from a transitive dependency rendering RN's deprecated component.
 
+### 11. Adaptive text contrast (2026-11-21)
+- New `src/lib/color.ts`: WCAG relative luminance + `contrastText(bg)` → near-black `#0b0b0d` on light backgrounds, white on dark (threshold 0.45).
+- Applied to every accent-filled element: `PrimaryButton`, selected `Chip`s, bottom-nav active pill (icon + label), side-drawer active row, cover `PlayBadge`, empty-state "Import Books", order-modal "Recent first", import-report "Open" badge, reader percentage prompt "Whole book".
+- Reader: changing the background swatch in the Aa popup or Settings → Reader now auto-pairs `tx` to a readable contrast; the Text color picker still overrides it afterwards. Theme preset swatches already ship bg+tx pairs.
+
 ---
 
 ## What Was Built (UI Prototype Implementation)
@@ -215,14 +235,14 @@ The screens, layout, and interactions from `sirum-ui-prototype.html` are impleme
 | Bottom tab bar nav | ✅ | Library / History / Import / Settings |
 | Side drawer nav | ✅ | Same destinations + format items |
 | Library grid 2/3/4 cols | ✅ | View + grid size in filter sheet; refined 2:3 card styling |
-| List view | ✅ | Rows with cover, progress bar, percent |
+| List view | ✅ | Title, author and date added on the left, cover on the right, with format and reading progress |
 | Caption vs overlay card styles | ✅ | 2 cols = detailed caption, 3–4 = compact overlay title |
 | Show/hide badges & details | ✅ | `device.showBadges`, `device.showDetails` |
 | Search title/author | ✅ | Toggle in app bar with instant clear |
 | Format tabs + counts | ✅ | Bottom mode; drawer items in side mode |
 | Filter sheet (view/sort/grid/format/status) | ✅ | Sort disabled in `recent` order mode |
 | Library order recent vs fixed | ✅ | Recency SQL per plan; ask-once prompt |
-| History screen | ✅ | Progress books by last read |
+| History screen | ✅ | Saved chapter and last-read timestamp, newest first by default, with History-only sorting and filtering |
 | Import: manual picker | ✅ | `.txt` and `.epub` import fully; `.pdf` reported unsupported |
 | Import: device scan (Android) | ✅ | SAF folder pick, recursive scan, resilient staging |
 | EPUB import & reading | ✅ | Pure-JS extraction (`fflate`, `fast-xml-parser`, `htmlparser2`) |
@@ -253,7 +273,7 @@ The screens, layout, and interactions from `sirum-ui-prototype.html` are impleme
 | M2 Data layer | Migrations + repos + tests | 🟡 Migrations & repos done; no tests yet |
 | M3 TXT slice | Import/read/save/restore TXT offline | ✅ Implemented and verified |
 | M4 EPUB reader | Full EPUB pipeline + UI features | ✅ Full EPUB extraction (OPF, TOC, covers, DRM detection) & redesigned UI |
-| M4b Reader screen parity | Contents panel, display popup, in-book search, scrubber (5.6.1) | 🟢 Mostly done | Scrolled flow only — **paged flow not implemented**; highlight/note creation UI still pending (M5); chunked rendering still pending |
+| M4b Reader screen parity | Contents panel, display popup, in-book search, scrubber (5.6.1) | 🟢 Mostly done | Scrolled flow only — **paged flow not implemented**; highlight/note creation UI still pending (M5); windowed rendering implemented, device profiling pending |
 | M5 PDF + annotations | pdf.js extraction; bookmarks/highlights/notes | 🟡 Partial | Bookmarks UI done; highlights list/delete only (no creation); PDF not started |
 | M6 Backend | Schema + RLS + triggers verified | 🟡 SQL written, unverified |
 | M7 Google sign-in | EAS dev build, sign in/out | ⬜ Not started |
@@ -271,5 +291,4 @@ The screens, layout, and interactions from `sirum-ui-prototype.html` are impleme
 2. **PDF importer** — `react-native-webview` + pdf.js spike per plan 5.4.
 3. **Highlight/note creation UI** — annotations tab lists existing rows only; text-selection anchoring is M5 scope (plan 5.11).
 4. **Reactive reads** — repository change notifications so library updates without focus reloads (plan 4.6).
-5. **Chunked/virtualized rendering** — each chapter still renders all its paragraphs in one ScrollView; very large chapters could jank.
-6. **Cover re-import** — books imported before migration 003 have no `cover_width`/`cover_height` and may have mislabeled `cover.jpg` bytes; a re-import normalizes them.
+5. **Large-book device profiling** check restore, chapter transitions, search jumps, peak memory and long flings on Android and iOS, including a 500+ page EPUB and a single-chapter TXT.

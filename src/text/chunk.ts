@@ -50,7 +50,10 @@ export function chunkChapter(
     }
 
     // Include the \n in the chunk (splitAt is the newline position, include it)
-    const end = splitAt + 1;
+    let end = splitAt + 1;
+    // A native Text node must never start halfway through an emoji.
+    if (/[\uD800-\uDBFF]/.test(chapterText[end - 1]) &&
+        /[\uDC00-\uDFFF]/.test(chapterText[end])) end--;
     chunks.push({
       chapterIndex,
       chunkIndex,

@@ -3,6 +3,7 @@ import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Chip, ColorSwatches, SectionLabel, SegmentedControl, SliderRow } from '@/components/ui/controls';
+import { contrastText } from '@/lib/color';
 import type { ReadingStyle } from '@/lib/settingsKeys';
 import { BG_SWATCHES, TX_SWATCHES } from './ReadingStyleEditor';
 
@@ -122,7 +123,7 @@ export function DisplayPopup({
                 label="Background"
                 value={style.bg}
                 options={BG_SWATCHES}
-                onChange={(bg) => onPatch({ bg })}
+                onChange={(bg) => onPatch({ bg, tx: contrastText(bg) })}
               />
               <ColorSwatches
                 label="Text"
