@@ -1,8 +1,37 @@
+import type { ChapterImage, ChapterParagraph } from '../formats/types';
+
 export interface Chunk {
+  image?: ChapterImage;
   chapterIndex: number;
   chunkIndex: number;    // index within the chapter
   startOffset: number;   // global char offset
   text: string;
+}
+
+/** Slice only the mounted chunk. A paragraph continued after an image or a hard cut keeps its indent. */
+export function paragraphRows(chunk: Chunk, paragraphs: ChapterParagraph[]) {
+  let low = 0;
+  let high = paragraphs.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (paragraphs[mid].offset <= chunk.startOffset) low = mid + 1;
+    else high = mid;
+  }
+  const rows = [];
+  const end = chunk.startOffset + chunk.text.length;
+  let from = chunk.startOffset;
+  let index = low - 1;
+  while (from < end) {
+    const paragraph = paragraphs[index];
+    const to = Math.min(end, paragraphs[index + 1]?.offset ?? end);
+    if (to > from) rows.push({
+      ...chunk, startOffset: from, text: chunk.text.slice(from - chunk.startOffset, to - chunk.startOffset),
+      paragraph, first: from === paragraph?.offset,
+    });
+    index++;
+    from = to;
+  }
+  return rows;
 }
 
 const CHUNK_SIZE = 3000; // target ~3 KB per chunk at paragraph boundaries
@@ -14,9 +43,37 @@ const CHUNK_SIZE = 3000; // target ~3 KB per chunk at paragraph boundaries
 export function chunkChapter(
   chapterIndex: number,
   chapterText: string,
-  chapterStartOffset: number
+  chapterStartOffset: number,
+  images?: ChapterImage[],
+  paragraphs?: ChapterParagraph[]
 ): Chunk[] {
   const chunks: Chunk[] = [];
+  const paragraphsPerChunk = 40;
+  if (images?.length || (paragraphs?.length ?? 0) > paragraphsPerChunk) {
+    let cursor = 0;
+    const appendText = (end: number) => {
+      for (const chunk of chunkChapter(chapterIndex, chapterText.slice(cursor, end), chapterStartOffset + cursor)) {
+        chunks.push({ ...chunk, chunkIndex: chunks.length });
+      }
+      cursor = end;
+    };
+    let paragraph = paragraphsPerChunk;
+    let imageIndex = 0;
+    while (paragraph < (paragraphs?.length ?? 0) || imageIndex < (images?.length ?? 0)) {
+      const image = images?.[imageIndex];
+      const offset = paragraphs?.[paragraph]?.offset ?? Infinity;
+      if (image && image.offset <= offset) {
+        appendText(image.offset);
+        chunks.push({ chapterIndex, chunkIndex: chunks.length, startOffset: chapterStartOffset + cursor, text: '', image });
+        imageIndex++;
+      } else {
+        appendText(offset);
+        paragraph += paragraphsPerChunk;
+      }
+    }
+    appendText(chapterText.length);
+    return chunks;
+  }
   let chunkIndex = 0;
   let pos = 0;
   const len = chapterText.length;

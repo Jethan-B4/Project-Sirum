@@ -1,7 +1,8 @@
 import { Image } from 'expo-image';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Linking, AppState, Modal, Pressable, Text, View, useWindowDimensions } from 'react-native';
+import { AccessibilityInfo, Alert, Linking, AppState, Modal, Pressable, Text, View, useWindowDimensions } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as FileSystem from 'expo-file-system/legacy';
 import Slider from '@react-native-community/slider';
 import * as Brightness from 'expo-brightness';
@@ -33,6 +34,7 @@ import { bookPercent } from '@/text/position';
 import { ChunkedChapter } from './ChunkedChapter';
 import type { ProgressInput } from '@/db/repositories/progress';
 import { ContentsPanel } from './ContentsPanel';
+import { ReaderOptionsPopup } from './ReaderOptionsPopup';
 import { DisplayPopup } from './DisplayPopup';
 import { readingFontFamily, BASE_FONT_SIZE } from './ReadingStyleEditor';
 import { resumePosition } from './resume';
@@ -46,7 +48,11 @@ type Overlay = 'none' | 'menu' | 'panel' | 'display' | 'search';
 
 export default function ReaderScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  return <BookReader key={id} id={id} />;
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <BookReader key={id} id={id} />
+    </GestureHandlerRootView>
+  );
 }
 
 function BookReader({ id }: { id: string }) {
@@ -65,6 +71,21 @@ function BookReader({ id }: { id: string }) {
   const [chs, setChs] = useState<ReaderChapter[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [overlay, setOverlay] = useState<Overlay>('none');
+  const [toolbarHeight, setToolbarHeight] = useState(54);
+  const [progressHeight, setProgressHeight] = useState(90);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const [screenReader, setScreenReader] = useState(false);
+  useEffect(() => {
+    let waitingForInitialValue = true;
+    const subscription = AccessibilityInfo.addEventListener('screenReaderChanged', (enabled) => {
+      waitingForInitialValue = false;
+      setScreenReader(enabled);
+    });
+    AccessibilityInfo.isScreenReaderEnabled().then((enabled) => {
+      if (waitingForInitialValue) setScreenReader(enabled);
+    });
+    return () => { waitingForInitialValue = false; subscription.remove(); };
+  }, []);
   const [chIdx, setChIdx] = useState(0);
   const [frac, setFrac] = useState(0);
   const [bms, setBms] = useState<BookmarkRow[]>([]);
@@ -96,9 +117,9 @@ function BookReader({ id }: { id: string }) {
   const [navigationRevision, setNavigationRevision] = useState(0);
   const [ready, setReady] = useState(false);
   const activeText = loaded?.index === chIdx ? loaded.text : null;
-  const chunks = useMemo(() => chunkChapter(chIdx, activeText ?? '', 0), [chIdx, activeText]);
   const [chapterNav, setChapterNav] = useState<{ index: number; data: ChapterNavigation } | null>(null);
   const nav = chapterNav?.index === chIdx ? chapterNav.data : null;
+  const chunks = useMemo(() => chunkChapter(chIdx, activeText ?? '', 0, nav?.images, nav?.paragraphs), [chIdx, activeText, nav]);
   const plain = useMemo(() => plainLinks(activeText ?? ''), [activeText]);
   const links = useMemo(() => {
     if (!nav?.links.length) return plain;
@@ -214,7 +235,8 @@ function BookReader({ id }: { id: string }) {
     section: Awaited<ReturnType<typeof readSupplement>>;
     path: string; offset: number; revision: number;
   } | null>(null);
-  const supplementChunks = useMemo(() => chunkChapter(0, supplement?.section.text ?? '', 0), [supplement]);
+  const supplementChunks = useMemo(() => chunkChapter(0, supplement?.section.text ?? '', 0,
+    supplement?.section.navigation.images, supplement?.section.navigation.paragraphs), [supplement]);
   const followLink = useCallback((href: string) => {
     const source = supplement ? '/' + supplement.path.split('/').map(encodeURIComponent).join('/') : ch?.source_href ?? '';
     const target = resolveBookLink(href, source, sources, nav?.packageDir);
@@ -228,8 +250,8 @@ function BookReader({ id }: { id: string }) {
         return;
       }
       if (target.kind === 'supplement') {
-        if (!doc?.local_uri) throw Error();
-        const section = supplement?.path === target.path ? supplement.section : await readSupplement(doc.local_uri, target.path);
+        if (!doc?.local_uri || !doc.text_dir) throw Error();
+        const section = supplement?.path === target.path ? supplement.section : await readSupplement(doc.local_uri, target.path, doc.text_dir);
         const offset = target.fragment ? section.navigation.anchors.find(([id]) => id === target.fragment)?.[1] : 0;
         if (offset == null) throw Error();
         setSupplement((previous) => ({ section, path: target.path, offset, revision: (previous?.revision ?? 0) + 1 }));
@@ -374,72 +396,69 @@ function BookReader({ id }: { id: string }) {
   const fontFamily = readingFontFamily(style.fam);
   const fontSize = BASE_FONT_SIZE * (style.size / 100);
   const marginH = (winWidth * style.mar) / 100;
-
-
+  const showControls = controlsVisible || screenReader || !!loadError;
 
   return (
     <Screen showNav={false}>
       <View className="flex-1" style={{ backgroundColor: style.bg }}>
-        <AppBar
-          title={doc?.title ?? 'Reader'}
-          leading="back"
-          actions={[
-            {
-              icon: 'search',
-              label: 'Search in book',
-              onPress: () => setOverlay('search'),
-            },
-          ]}
-          customAction={
-            <View className="flex-row items-center">
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Display options"
-                onPress={() => setOverlay('display')}
-                className="px-2 py-1">
-                <Text className="font-ui text-[17px] font-semibold" style={{ color: style.tx }}>
-                  Aa
-                </Text>
-              </Pressable>
-              <IconButton
-                icon="ellipsis-vertical"
-                label="More"
-                onPress={() => setOverlay((o) => (o === 'menu' ? 'none' : 'menu'))}
-              />
-            </View>
-          }
-        />
-
-        {/* Overflow menu (prototype `.menu`) */}
-        {overlay === 'menu' && (
-          <>
-            <Pressable
-              className="absolute inset-0 z-10"
-              onPress={() => setOverlay('none')}
-            />
-            <View className="absolute right-3 z-20 bg-surface-2 rounded-lg py-1.5 w-[62%] max-w-[260px]">
-              {(
-                [
-                  ['bookmark', 'Add bookmark'],
-                  ['list', 'Contents'],
-                  ['settings-outline', 'Settings'],
-                ] as const
-              ).map(([icon, label]) => (
+        <View className="absolute top-0 left-0 right-0 z-10 bg-surface border-b border-line"
+          pointerEvents={showControls ? 'auto' : 'none'} accessibilityElementsHidden={!showControls}
+          importantForAccessibility={showControls ? 'auto' : 'no-hide-descendants'}
+          style={{ opacity: showControls ? 1 : 0 }} onLayout={(e) => setToolbarHeight(e.nativeEvent.layout.height)}>
+          <AppBar
+            title={doc?.title ?? 'Reader'}
+            leading="back"
+            actions={[
+              {
+                icon: 'search',
+                label: 'Search in book',
+                onPress: () => setOverlay('search'),
+              },
+            ]}
+            customAction={
+              <View className="flex-row items-center">
                 <Pressable
-                  key={label}
-                  onPress={() => {
-                    setOverlay(icon === 'list' ? 'panel' : 'none');
-                    if (icon === 'bookmark') void addBookmark();
-                    if (icon === 'settings-outline') router.push('/settings-reader' as never);
-                  }}
-                  className="flex-row items-center gap-3 px-5 py-3.5">
-                  <Icon name={icon} size={18} tone="default" />
-                  <Text className="font-ui text-tx text-[15px]">{label}</Text>
+                  accessibilityRole="button"
+                  accessibilityLabel="Display options"
+                  onPress={() => setOverlay('display')}
+                  className="px-2 py-1">
+                  <Text className="font-ui text-tx text-[17px] font-semibold">
+                    Aa
+                  </Text>
                 </Pressable>
-              ))}
-            </View>
-          </>
-        )}
+                <IconButton
+                  icon="ellipsis-vertical"
+                  label="More"
+                  onPress={() => setOverlay((o) => (o === 'menu' ? 'none' : 'menu'))}
+                />
+              </View>
+            }
+          />
+        </View>
+
+        <ReaderOptionsPopup inline visible={overlay === 'menu'} onClose={() => setOverlay('none')} toolbarHeight={toolbarHeight}>
+          <View className="py-1.5">
+            {(
+              [
+                ['bookmark', 'Add bookmark'],
+                ['list', 'Contents'],
+                ['settings-outline', 'Settings'],
+              ] as const
+            ).map(([icon, label]) => (
+              <Pressable
+                key={label}
+                onPress={() => {
+                  setOverlay(icon === 'list' ? 'panel' : 'none');
+                  if (icon === 'bookmark') void addBookmark();
+                  if (icon === 'settings-outline') router.push('/settings-reader' as never);
+                }}
+                className="flex-row items-center gap-3 px-5 py-3.5">
+                <Icon name={icon} size={18} tone="default" />
+                <Text className="font-ui text-tx text-[15px]">{label}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </ReaderOptionsPopup>
 
         {loadError ? (
           <View className="flex-1 items-center justify-center px-8">
@@ -456,9 +475,11 @@ function BookReader({ id }: { id: string }) {
         ) : (
           <>
             <ChunkedChapter
-              key={[chIdx, navigationRevision, winWidth, style.fam, style.size, style.lh,
+              key={[chIdx, navigationRevision, !!nav?.presentationVersion, winWidth, style.fam, style.size, style.lh,
                 style.wt, style.mar, style.align].join('/')}
               chunks={chunks}
+              startPadding={toolbarHeight + 12} endPadding={progressHeight + 12}
+              publisherStyles={nav?.styles} paragraphs={nav?.paragraphs} mediaDir={doc?.text_dir}
               links={links}
               linkColor={linkColor(style.bg)}
               onLink={followLink}
@@ -468,13 +489,19 @@ function BookReader({ id }: { id: string }) {
               textStyle={{ color: style.tx, fontFamily, fontWeight: String(style.wt) as '400',
                 fontSize, lineHeight: Math.round(fontSize * style.lh), textAlign: style.align }}
               onMove={(offset) => recordPosition(chIdx, offset)}
+              onToggleControls={() => setControlsVisible((visible) => !visible)}
+              onScrollStart={() => setControlsVisible(false)}
+              onChapterSwipe={chs.length > 1 && !screenReader ? (direction) => jumpToChapter(chIdx + direction) : undefined}
               footer={chIdx + 1 < chs.length && (
-                <Pressable accessibilityRole="button" onPress={() => jumpToChapter(chIdx + 1)} className="py-5">
+                <Pressable accessibilityRole="button" onPress={(event) => {
+                  event.stopPropagation();
+                  jumpToChapter(chIdx + 1);
+                }} className="py-5">
                   <Text style={{ color: style.tx }}>Next chapter</Text>
                 </Pressable>
               )}>
               {/* Book cover landing page (if book has cover art and on chapter 0) */}
-              {chIdx === 0 && doc?.cover_uri ? (
+              {chIdx === 0 && doc?.cover_uri && !(nav?.images?.length && !activeText.trim()) ? (
                 <View
                   style={{
                     alignItems: 'center',
@@ -550,7 +577,7 @@ function BookReader({ id }: { id: string }) {
               ) : null}
 
               {/* Chapter heading (prototype h2) */}
-              {ch.title ? (
+              {ch.title && !activeText.startsWith(ch.title + '\n') && activeText !== ch.title ? (
                 <Text
                   className="mb-4"
                   style={{
@@ -572,7 +599,11 @@ function BookReader({ id }: { id: string }) {
             </ChunkedChapter>
 
             {/* Bottom bar: chapter title, percent, scrubber (prototype `.bot`) */}
-            <View className={winHeight < 480 ? "bg-surface px-4 py-1" : "bg-surface px-5 pt-3.5 pb-4"}>
+            <View className={'absolute bottom-0 left-0 right-0 z-10 bg-surface border-t border-line ' +
+              (winHeight < 480 ? 'px-4 py-1' : 'px-5 pt-3.5 pb-4')}
+              pointerEvents={showControls ? 'auto' : 'none'} accessibilityElementsHidden={!showControls}
+              importantForAccessibility={showControls ? 'auto' : 'no-hide-descendants'}
+              style={{ opacity: showControls ? 1 : 0 }} onLayout={(e) => setProgressHeight(e.nativeEvent.layout.height)}>
               <View className="flex-row justify-between items-center gap-3 mb-2">
                 <Text
                   numberOfLines={1}
@@ -615,6 +646,7 @@ function BookReader({ id }: { id: string }) {
                 <IconButton icon="close" label="Return to reading" tone={style.tx} onPress={() => setSupplement(null)} />
               </View>
               <ChunkedChapter key={supplement.revision} chunks={supplementChunks}
+                publisherStyles={supplement.section.navigation.styles} paragraphs={supplement.section.navigation.paragraphs} mediaDir={doc?.text_dir}
                 length={supplement.section.text.length} links={supplement.section.navigation.links}
                 linkColor={linkColor(style.bg)} onLink={followLink} initialOffset={supplement.offset}
                 margin={marginH} textStyle={{ color: style.tx, fontFamily, fontSize, lineHeight: Math.round(fontSize * style.lh) }}
@@ -642,6 +674,7 @@ function BookReader({ id }: { id: string }) {
       {/* Aa display popup (flow, brightness, theme, size, align, margin) */}
       <DisplayPopup
         visible={overlay === 'display'}
+        toolbarHeight={toolbarHeight}
         onClose={() => setOverlay('none')}
         style={scope === 'book' ? style : defaultStyle}
         scope={scope}

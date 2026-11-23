@@ -10,7 +10,7 @@ import { chapters, documents, importLog } from '@/db/repositories';
 import { importEpub, readEpubCover } from '@/formats/epub/importEpub';
 import { importTxt } from '@/formats/txt/importTxt';
 import { NORMALIZATION_VERSION } from '@/text/normalize';
-import type { Chapter } from '@/formats/types';
+import { presentationFile, type Chapter } from '@/formats/types';
 import type { DocumentFormat } from '@/lib/settingsKeys';
 
 export interface PickedFile {
@@ -374,6 +374,7 @@ async function runImport(picked: PickedFile): Promise<ImportResult> {
       });
     } else if (format === 'epub') {
       book = await importEpub(originalUri, {
+        chaptersDir: existing ? undefined : chaptersDir,
         title,
         contentHash,
         sizeBytes: picked.size ?? 0,
@@ -400,7 +401,7 @@ async function runImport(picked: PickedFile): Promise<ImportResult> {
       const padded = String(ch.index).padStart(4, '0');
       await FileSystem.writeAsStringAsync(`${chaptersDir}/${padded}.txt`, ch.text);
       if (ch.navigation) {
-        await FileSystem.writeAsStringAsync(chaptersDir + '/' + padded + '.links.json', JSON.stringify(ch.navigation));
+        await FileSystem.writeAsStringAsync(chaptersDir + '/' + presentationFile(ch.index), JSON.stringify(ch.navigation));
       }
     }
 

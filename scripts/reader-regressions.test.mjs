@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chunkChapter, findChunkForOffset } from '../src/text/chunk.ts';
+import { chunkChapter, findChunkForOffset, paragraphRows } from '../src/text/chunk.ts';
 import { resumePosition } from '../src/features/reader/resume.ts';
 import { searchBook } from '../src/features/reader/searchBook.ts';
 
@@ -144,4 +144,93 @@ test('accent foregrounds stay readable for light, dark, and middle-luminance fil
     const [low, high] = [bg, linkColor(bg)].map(relativeLuminance).sort((a, b) => a - b);
     assert.ok((high + 0.05) / (low + 0.05) >= 4.5);
   }
+});
+
+test('publisher CSS, emphasis, images and links share normalized chapter offsets', async () => {
+  const { extractChapterHtml } = await import('../src/formats/epub/chapterHtml.ts');
+  const assets = {
+    css: new Map([['OPS/theme.css', '.poem .voice {font-style: italic} #lead {font-weight:bold; color:white}']]),
+    images: new Map([['OPS/art/sun rise.png', {file: 'media-0.png', aspect: 2}]]),
+  };
+  const source = '<head><link rel="stylesheet" href="../theme.css"/><style>.note {text-decoration:underline}</style></head>' +
+    '<section class="poem"><h2>Title</h2><p id="lead">A <a class="voice" href="#end">linked phrase</a>.</p>' +
+    '<figure><a href="#end"><img src="../art/sun%20rise.png" alt="Sunrise"/></a></figure>' +
+    '<p class="note" id="end" style="font-size:120%">Cafe\u0301</p></section>';
+  const { text, navigation } = extractChapterHtml(source, 'OPS/body/ch.xhtml', assets);
+  assert.equal(text, 'Title\nA linked phrase.\nCaf\u00e9');
+  const span = (label) => navigation.styles.find(s => text.slice(s.start, s.end) === label).style;
+  assert.equal(span('Title').bold, true);
+  assert.deepEqual(span('linked phrase'), {bold: true, italic: true});
+  assert.equal(span('Caf\u00e9').scale, 1.2);
+  assert.equal(span('Caf\u00e9').underline, true);
+  assert.equal(navigation.links.length, 1);
+  assert.deepEqual(navigation.images, [{offset: text.indexOf('Caf'), alt:'Sunrise', file:'media-0.png', href:'#end', aspect:2}]);
+  const chunks = chunkChapter(0, text, 0, navigation.images);
+  assert.equal(chunks.map(c => c.text).join(''), text);
+  assert.equal(chunks[1].image.file, 'media-0.png');
+  assert.equal(chunks[2].startOffset, navigation.anchors.find(([id]) => id === 'end')[1]);
+});
+
+test('image-only reflowable pages have a renderable chunk without inserting characters', async () => {
+  const { extractChapterHtml } = await import('../src/formats/epub/chapterHtml.ts');
+  const assets = {css: new Map(), images: new Map([['cover.jpg', {file: 'media-1.jpg'}]])};
+  const {text, navigation} = extractChapterHtml('<svg><image xlink:href="cover.jpg"/></svg>' +
+    '<img src="https://example.org/cover.jpg"/>', 'page.xhtml', assets);
+  assert.equal(text, '');
+  const chunks = chunkChapter(0, text, 0, navigation.images);
+  assert.equal(chunks.length, 1);
+  assert.equal(chunks[0].image.file, 'media-1.jpg');
+  assert.equal(chunks[0].startOffset, 0);
+});
+
+test('EPUB paragraph gaps, explicit blank lines and nested lists share stable source positions', async () => {
+  const { extractChapterHtml } = await import('../src/formats/epub/chapterHtml.ts');
+  const source = '<style>p {margin: 0} .spaced {margin-bottom: 2em} ol {list-style-type: upper-alpha}</style>' +
+    '<p class="spaced">Cafe\u0301</p><p>Second<br/>line<br/><br/>verse</p><p>&nbsp;</p>' +
+    '<ol start="26"><li><p>First</p><p>continued</p><ul><li>Nested</li></ul></li>' +
+    '<li value="28"><a href="#note">Next</a></li></ol><blockquote id="note"><p>Quote</p></blockquote>';
+  const { text, navigation } = extractChapterHtml(source);
+  assert.equal(text, 'Café\nSecond\nline\nverse\nFirst\ncontinued\nNested\nNext\nQuote');
+  const rows = paragraphRows(chunkChapter(0, text, 0)[0], navigation.paragraphs);
+  const blocks = Object.fromEntries(rows.map((row) => [row.text.trim(), row.paragraph]));
+  assert.equal(blocks.Second.gap, 2);
+  assert.equal(blocks.line.gap, 0);
+  assert.equal(blocks.verse.blankLines, 1);
+  assert.equal(blocks.First.blankLines, 1);
+  assert.equal(blocks.First.marker, 'Z.');
+  assert.equal(blocks.continued.marker, undefined);
+  assert.equal(blocks.continued.indent, 1);
+  assert.equal(blocks.Nested.indent, 2);
+  assert.equal(blocks.Nested.marker, '◦');
+  assert.equal(blocks.Next.marker, 'AB.');
+  assert.equal(blocks.Quote.indent, 1);
+  assert.equal(navigation.links[0].start, text.indexOf('Next'));
+  assert.equal(navigation.anchors[0][1], text.indexOf('Quote'));
+  assert.equal(rows.map(row => row.text).join(''), text);
+});
+
+test('a long EPUB list keeps its numbering through chunk boundaries and renders bounded groups', async () => {
+  const { extractChapterHtml } = await import('../src/formats/epub/chapterHtml.ts');
+  const source = '<ol reversed>' + '<li>x</li>'.repeat(600) + '<li>' + 'y'.repeat(6400) + '</li></ol>';
+  const { text, navigation } = extractChapterHtml(source);
+  const chunks = chunkChapter(0, text, 0, [], navigation.paragraphs);
+  const rows = chunks.flatMap(chunk => {
+    const group = paragraphRows(chunk, navigation.paragraphs);
+    assert.ok(group.length <= 40);
+    return group;
+  });
+  assert.equal(rows.map(row => row.text).join(''), text);
+  assert.equal(rows[0].paragraph.marker, '601.');
+  assert.equal(rows.filter(row => row.first).length, 601);
+  assert.equal(rows.at(-1).paragraph.marker, '1.');
+  assert.equal(rows.at(-1).first, false);
+});
+
+test('TXT keeps typed bullets, indentation and internal blank lines across native text chunks', async () => {
+  const { normalizeText } = await import('../src/text/normalize.ts');
+  const source = 'x'.repeat(2998) + '\r\n\r\n  • first\r\n    - nested\r\n\r\n\r\n2. second';
+  const text = normalizeText(source);
+  const chunks = chunkChapter(0, text, 0);
+  assert.equal(chunks.map(chunk => chunk.text).join(''), source.replaceAll('\r\n', '\n'));
+  assert.deepEqual(chunks.map(chunk => chunk.text.replace(/\n$/, '')).join('\n'), text);
 });

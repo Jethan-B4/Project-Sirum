@@ -114,6 +114,7 @@ export function SliderRow({
         <Text className="font-ui text-mu text-[13px] font-semibold">{display ?? value}</Text>
       </View>
       <Slider
+        accessibilityLabel={label}
         minimumValue={min}
         maximumValue={max}
         step={step}

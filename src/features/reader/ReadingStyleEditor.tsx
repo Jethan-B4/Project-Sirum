@@ -35,6 +35,16 @@ const WEIGHTS: readonly (readonly [400 | 500 | 700, string])[] = [
 /** Base reading font size in pt; `style.size` is a percentage of this. */
 export const BASE_FONT_SIZE = 17;
 
+export function LineHeightControl({ value, onChange }: {
+  value: number;
+  onChange(patch: Pick<ReadingStyle, 'lh'>): void;
+}) {
+  return (
+    <SliderRow label="Line height" value={value} display={value.toFixed(1) + '×'}
+      min={1.2} max={2.2} step={0.1} onChange={(lh) => onChange({ lh: Number(lh.toFixed(1)) })} />
+  );
+}
+
 /** RN fontFamily for a reading-style family choice. */
 export function readingFontFamily(fam: ReadingStyle['fam']): string {
   return fam === 'serif' ? 'serif' : fam === 'mono' ? 'monospace' : 'sans-serif';
@@ -87,15 +97,7 @@ export function ReadingStyleEditor({
         step={10}
         onChange={(size) => onChange({ size })}
       />
-      <SliderRow
-        label="Line height"
-        value={value.lh}
-        display={value.lh.toFixed(1)}
-        min={1.2}
-        max={2.2}
-        step={0.1}
-        onChange={(lh) => onChange({ lh })}
-      />
+      <LineHeightControl value={value.lh} onChange={onChange} />
       <SliderRow
         label="Margin"
         value={value.mar}

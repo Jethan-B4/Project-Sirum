@@ -2,13 +2,16 @@ import { XMLParser } from 'fast-xml-parser';
 import * as fflate from 'fflate';
 import { File, FileMode } from 'expo-file-system';
 import * as FileSystem from 'expo-file-system/legacy';
+import { scanEntries } from './archiveEntries';
 import { extractChapterHtml } from './chapterHtml';
+import { cacheAsset, emptyAssets, isPublicationAsset, saveAssets } from './publicationAssets';
 import * as htmlparser2 from 'htmlparser2';
 
 import { NORMALIZATION_VERSION } from '@/text/normalize';
 import type { Chapter, ImportedBook } from '../types';
 
 interface EpubOpts {
+  chaptersDir?: string;
   title: string;
   contentHash: string;
   sizeBytes: number;
@@ -222,8 +225,9 @@ function packageInfo(entry: (name: string) => Uint8Array | undefined) {
     }
   }
 
-  const coverData = coverHref ? entry(resolvePath(opfDir, coverHref)) : undefined;
-  return { xmlParser, opfDir, pkg, metadata, manifestById, coverData };
+  const coverPath = coverHref ? resolvePath(opfDir, coverHref) : undefined;
+  const coverData = coverPath ? entry(coverPath) : undefined;
+  return { xmlParser, opfDir, pkg, metadata, manifestById, coverData, coverPath };
 }
 
 /** Extract only the package metadata and named cover when repairing an existing book. */
@@ -243,10 +247,15 @@ export async function importEpub(uri: string, opts: EpubOpts): Promise<ImportedB
   const fileBytes = await readArchiveBytes(uri);
 
   // Unzip entries, skipping heavy embedded fonts and multimedia unused by the text reader
+  let hasImages = false;
   let unzipped: fflate.Unzipped;
   try {
     unzipped = fflate.unzipSync(fileBytes, {
       filter(entry) {
+        if (isPublicationAsset(entry.name) && !/\.css$/i.test(entry.name)) {
+          hasImages = true;
+          return false;
+        }
         return !NON_TEXT_ASSETS.test(entry.name);
       },
     });
@@ -261,7 +270,23 @@ export async function importEpub(uri: string, opts: EpubOpts): Promise<ImportedB
     zip[key] = unzipped[rawKey];
   }
 
-  const { xmlParser, opfDir, pkg, metadata, manifestById, coverData } = packageInfo((name) => zip[name]);
+  const { xmlParser, opfDir, pkg, metadata, manifestById, coverPath } = packageInfo((name) => zip[name]);
+  const assets = emptyAssets();
+  const dir = opts.chaptersDir;
+  for (const name of Object.keys(zip)) {
+    if (/\.css$/i.test(name)) assets.css.set(name, fflate.strFromU8(zip[name]));
+  }
+  let coverData = coverPath ? zip[coverPath] : undefined;
+  if (hasImages && (dir || coverPath)) {
+    await scanEntries(fileBytes, (name) => {
+      if (name !== coverPath && (!dir || !isPublicationAsset(name) || /\.css$/i.test(name))) return;
+      return async (bytes) => {
+        if (name === coverPath) coverData = bytes;
+        if (dir) await cacheAsset(assets, dir, name, bytes);
+      };
+    }, () => !dir && !!coverData);
+  }
+  if (dir) await saveAssets(dir, assets);
 
   // 4. Extract title & author
   const rawTitle = metadata.title || metadata['dc:title'];
@@ -383,13 +408,17 @@ export async function importEpub(uri: string, opts: EpubOpts): Promise<ImportedB
 
     const itemPath = resolvePath(opfDir, manifestItem.href);
     const itemBytes = zip[itemPath];
-    if (!itemBytes) continue;
+    const image = assets.images.get(itemPath);
+    if (!itemBytes && !image) continue;
 
-    const html = fflate.strFromU8(itemBytes);
-    const { text, firstHeading, navigation } = extractChapterHtml(html);
+    const { text, firstHeading, navigation } = itemBytes
+      ? extractChapterHtml(fflate.strFromU8(itemBytes), itemPath, assets)
+      : { text: '', firstHeading: undefined, navigation: {
+          presentationVersion: 2 as const, links: [], anchors: [], images: [{ ...image!, offset: 0, alt: '' }],
+        } };
 
-    // Skip empty spine items (cover pages, blank spacers)
-    if (!text.trim()) continue;
+    // Keep illustrated chapters even when they have no canonical text.
+    if (!text.trim() && !navigation.images?.length) continue;
 
     const tocTitle = tocMap.get(itemPath);
     const title = tocTitle || firstHeading || `Section ${chapterIndex + 1}`;
@@ -410,7 +439,7 @@ export async function importEpub(uri: string, opts: EpubOpts): Promise<ImportedB
   }
 
   if (chapters.length === 0) {
-    throw new Error('No readable text chapters found in this EPUB.');
+    throw new Error('No readable text or illustrations found in this EPUB.');
   }
 
   return {

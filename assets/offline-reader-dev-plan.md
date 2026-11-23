@@ -96,7 +96,7 @@ Implementation tracking lives in `development-progress.md`. Compared with this p
 **Explicitly out of scope for v1 (decide later):**
 - DRM-protected EPUBs (detected and rejected with a clear message)
 - Fixed-layout (pre-paginated) EPUBs, comics, and image-heavy books
-- Inline images, tables, math, and original publisher CSS in the reader (text-first rendering)
+- Full publisher CSS layout, embedded fonts, complex tables, and typeset mathematics
 - Layout-faithful PDF viewing, and OCR for scanned PDFs
 - MOBI / AZW / DOCX
 - Syncing the files themselves (Option B)
@@ -108,7 +108,7 @@ Implementation tracking lives in `development-progress.md`. Compared with this p
 
 | Format | Priority | Approach | Known limits |
 |---|---|---|---|
-| **EPUB** | **Primary.** Gets the most design and testing effort. | Unzip, parse OPF/TOC, extract each spine item to normalized text, one chapter per readable spine item (see 5.2) | Publisher styling, images, and complex layout are not preserved in v1; DRM and fixed-layout books unsupported |
+| **EPUB** | **Primary.** Gets the most design and testing effort. | Unzip, parse OPF/TOC, extract each spine item to normalized text, one chapter per readable spine item (see 5.2) | Supports common publisher typography and local illustrations. DRM, fixed-layout books and full CSS layout are outside scope |
 | **TXT** | Secondary, and the simplest. Used as the first "walking skeleton" to validate the pipeline. | Decode (with encoding detection), normalize, treat the file as a single chapter | Messy encodings; no chapters, so chapter percentage falls back to book percentage |
 | **PDF** | Best-effort. | Extract text with pdf.js inside a hidden WebView, normalize, group into chapters by outline or page blocks (see 5.4) | Scanned PDFs have no text; multi-column layouts, tables, and headers/footers extract poorly |
 
@@ -591,9 +591,9 @@ Build and validate all of this **before** adding auth or sync. Test with airplan
 1. **Name and type matching.** Match the decoded file name with a case-insensitive extension test (`/\.epub$/i`, also `.txt` and `.pdf`), not the MIME type or the raw content URI. SAF URIs percent-encode `/` as `%2F`, so take the last decoded path segment. Providers report `application/epub+zip`, `application/octet-stream`, `application/x-zip`, or nothing, so accept all of them and validate by content (ZIP signature `PK\x03\x04`, then `META-INF/container.xml`).
 2. **Directory traversal.** Recurse every child returned by `readDirectoryAsync`, including nested folders and folders with many entries. Do not cap depth or count silently, keep a visited set, and treat a folder that fails to read as a per-folder error rather than aborting the scan.
 3. **Staging.** Keep the multi-strategy `stageFile` (copy, then chunked read/write). Stream large files in chunks, measure peak memory, and delete partial copies on failure.
-4. **Parser strictness.** Make the EPUB importer tolerant of: a missing or misordered `mimetype`; ZIP64 and data-descriptor archives; spaces, backslashes, or percent-encoding in paths in `container.xml`, the OPF, and manifest hrefs; an OPF in a subfolder; several `rootfile` entries (pick `application/oebps-package+xml`); a spine `idref` missing from the manifest (skip that item, do not fail); spines that are all `linear="no"`; XML with a BOM or a non-UTF-8 declaration; a missing nav or NCX (fall back to heading text); and XHTML namespaces and entities. If no chapter has text, report "No readable text (image-only or fixed layout)" instead of a generic failure.
+4. **Parser strictness.** Make the EPUB importer tolerant of: a missing or misordered `mimetype`; ZIP64 and data-descriptor archives; spaces, backslashes, or percent-encoding in paths in `container.xml`, the OPF, and manifest hrefs; an OPF in a subfolder; several `rootfile` entries (pick `application/oebps-package+xml`); a spine `idref` missing from the manifest (skip that item, do not fail); spines that are all `linear="no"`; XML with a BOM or a non-UTF-8 declaration; a missing nav or NCX (fall back to heading text); and XHTML namespaces and entities. If no chapter contains text or a supported illustration, report that the EPUB has no readable content. Report fixed-layout books separately.
 5. **DRM detection.** An `encryption.xml` that lists only font obfuscation (`http://www.idpf.org/2008/embedding`, `http://ns.adobe.com/pdf/enc#RC`) is not DRM. Block a book only when content documents are encrypted.
-6. **Memory.** Unzipping the whole archive at once loads everything. Use fflate's filtered or streaming unzip, read only the entries needed (skip large images other than the cover), and extract chapter by chapter.
+6. **Memory.** Unzipping the whole archive at once loads everything. Use filtered unzip for publication text and stream illustration entries to disk in compressed input blocks. Mount only the nearby chapter content during reading.
 7. **Duplicates.** Compare the hash only against non-deleted rows and report "Already in your library" with an option to open it, so a skipped duplicate is not mistaken for a missed file.
 8. **Silent catch blocks.** Every catch writes an `import_log` row (4.8) with the reason.
 
@@ -614,24 +614,25 @@ An EPUB is a ZIP archive of XHTML chapters plus metadata. Parse it with pure-JS 
    - `<spine>`: the ordered reading list. In v1, use items with `linear` not set to `no`.
 4. **Table of contents:** EPUB 3 uses the nav document (`<nav epub:type="toc">`); EPUB 2 uses the NCX file referenced by the spine's `toc` attribute. Map TOC entries to spine items by href (ignoring the `#fragment`) to get chapter titles and a TOC tree for the navigation drawer.
 5. **Cover:** EPUB 3 `cover-image` property; EPUB 2 `<meta name="cover">`; fall back to the first image of the first spine item. Save a downscaled thumbnail (local only).
-6. **Extract text** from each readable spine item (rules below). The ordered list of non-empty results is the chapter list, and `chapter_index` is the index in that list (not the raw spine index). Skip spine items whose normalized text is empty (cover pages, image-only pages).
+6. **Extract each readable spine item** in publication order. Include sections with text or supported illustrations, including image-only pages. Preserve existing chapter indexes when upgrading earlier imports so saved positions remain valid.
 7. **Chapter title:** the TOC label if present; otherwise the first heading in the chapter; otherwise "Section N".
 8. **Detect unsupported books:** `META-INF/encryption.xml` with algorithms other than font obfuscation means DRM; `rendition:layout` of `pre-paginated` means fixed layout. Show a clear message and do not import. (Font obfuscation is not DRM and is fine.)
 
 **Text extraction rules (deterministic; any change bumps `normalization_version`)**
-- Parse XHTML leniently. Ignore `<head>`, `<script>`, `<style>`, and `<svg>`. Images contribute no text in v1.
+- Parse XHTML leniently. Exclude head, script, style, SVG and image payloads from canonical text. Record styles and local illustration references separately at their normalized character offsets.
 - **Block elements** (`p`, `div`, `h1` to `h6`, `li`, `blockquote`, `pre`, `tr`, `section`, `article`, and similar) end a paragraph with `\n`. `<br>` becomes `\n`.
-- Outside `<pre>`, collapse runs of whitespace (including source newlines) to a single space and trim each paragraph. Drop empty paragraphs and never emit more than one `\n` in a row. A paragraph is one line; the reader draws paragraph spacing from the setting.
+- Outside `<pre>`, collapse XHTML whitespace within each canonical paragraph and join paragraphs with one newline. Store paragraph margins, explicit blank lines, quotation depth and list markers as presentation data. Apply the reader's font size and line height when laying out those blocks. In TXT, preserve internal blank lines, typed list markers and indentation.
+- Support nested ordered and unordered lists, including custom starts, item values, reversed numbering and common marker styles. Keep markers outside canonical text so a list can reflow without changing bookmarks, search results or link offsets.
 - Decode HTML entities. Convert non-breaking spaces to normal spaces and remove soft hyphens (U+00AD).
 - Apply the shared normalization from 5.5 (Unicode NFC and so on).
 - Chapter text is paragraphs joined by `\n`, with no leading or trailing newline.
-- Optional, later: record heading and emphasis ranges in a **side-car spans list** stored beside the chapter text. It styles headings and italics without changing any offsets.
+- Store headings, emphasis, relative type sizes, underlines, strikethroughs, links and illustration positions beside the chapter text. Read semantic XHTML and supported rules from inline, embedded and linked local CSS. The reader controls the base font, colors, spacing and margins. Render illustrations within the available width, with their alternative text available to assistive technology.
 
 **Known EPUB pitfalls**
 - **One giant spine file, or hundreds of tiny ones.** Some books put the whole text in one spine item; others split chapters into many small files. Chapter percentage is only as meaningful as the chapters. v1 uses spine items; a later improvement groups spine items by TOC entries, so one TOC chapter spans several files.
 - **Missing or wrong TOC** and TOC entries that point into the middle of a spine file (fragments).
 - **CJK, right-to-left, and ruby text:** extraction works, but rendering and text selection need testing.
-- **Internal links, footnotes, tables, and math** are flattened to text in v1.
+- **Links and footnotes** retain their destinations and ask for confirmation. Tables and math use their extracted text.
 - **Memory and time:** extract chapter by chapter, write each to disk, and release it. Show progress.
 
 **Extraction cache layout (rebuildable from the original)**
@@ -641,6 +642,9 @@ documentDirectory/books/{documentId}/
   original.epub
   chapters/0000.txt
   chapters/0001.txt
+  chapters/0000.presentation-v2.json
+  chapters/publication-assets.json
+  chapters/media-0.png
   cover.jpg
 ```
 
@@ -711,12 +715,16 @@ Reference prototype: `sirum-reader-prototype.html`. The scrolled reader now rend
 
 - **Top bar:** back, book title, in-book search, display (Aa), and an overflow menu with **Add bookmark**, **Contents**, and **Settings**.
 - **Bottom bar:** current chapter title, a percentage, and a scrubber. The percentage and scrubber follow `reader.percentageMode` (5.8).
+- The scrolled reader opens with both bars visible. A tap on the passage toggles them, and starting a vertical scroll hides them. Position both bars absolutely above the scroll viewport. Reserve their measured heights only at the beginning and end of the chapter. Showing or hiding either bar must preserve the visible passage and its line wrapping. Screen-reader users retain access to the bars.
+- **Aa** and **More** open below the toolbar at its trailing edge. Keep the display title and close action visible, group settings into Text, Colors and Layout, and allow the controls to scroll on short screens.
+- A horizontal swipe across the passage opens the next chapter when swiping left and the previous chapter when swiping right. Open the destination at its start, preserve the existing progress-saving behavior, and stop at the first and last chapters. Keep the scrubber, links, and display controls independently interactive.
 - **Contents panel** (opens from the right, three tabs): **Contents** (chapter list from `document_chapters`, current chapter highlighted, tap to jump), **Annotations** (highlights and notes), and **Bookmarks** (chapter and percent, tap to jump).
 - **Display popup** (from Aa):
   - **Flow:** Auto, Paged, or Scrolled. Scrolled is v1. Paged paginates lazily around the current position, with tap zones on the left and right thirds. Auto picks paged on wide screens and scrolled on phones.
   - **Brightness:** `expo-brightness` or a dimming overlay, stored as `device.readerBrightness`; restore the system value on exit.
   - **Theme:** swatches (white, dark gray, black, sepia) plus custom background and text colors.
   - **Text size** (percent), **text align** (left or justify), and **margin** (percent of width), each with minus and plus controls.
+  - **Line height** uses the same 1.2× to 2.2× slider in Aa and Reader settings. Aa saves the change to the selected scope and restores the current passage after text reflows.
   - These write `reader.style`, or the per-book override when "This book only" is chosen. Add that switch to the popup (the prototype omits it). `reader.style` gains `flow` and `align`, and `size` and `mar` become percentages instead of pixels.
 - **In-book search:** the search icon opens a full-screen search. An empty query lists recent searches (device-local `device.searchHistory`, last 10, with a clear action). Typing shows live results (chapter title and a snippet with the match highlighted), and tapping a result jumps to that chapter and offset. Scan the normalized chapter files one at a time, yielding between chapters, with a result cap (for example 200). Add an FTS index only if scanning is too slow. Voice input is out of scope for v1.
 - **Bookmarks:** add from the menu; store `char_offset`, `chapter_index`, `chapter_char_offset`, and a short snippet (5.11).

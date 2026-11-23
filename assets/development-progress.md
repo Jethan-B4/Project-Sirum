@@ -24,6 +24,27 @@ Legend: ✅ done · 🟢 advanced / nearly done · 🟡 partial · ⬜ not start
 
 ---
 
+## Paragraphs and lists in the reader (2026-11-23)
+
+- Reflowable EPUB chapters and linked sections preserve paragraph gaps, common CSS block margins, explicit blank lines, nested list indentation and block quotations. List markers include bullets, decimal, alphabetic and Roman numbering. Wrapped text aligns beneath the item text.
+- Presentation data uses the existing chapter offsets. Older local EPUBs rebuild the new data from their saved original. TXT keeps the author's internal blank lines, indentation and literal list symbols.
+- Rendering groups up to 40 paragraph starts per text chunk. Regression fixtures cover paragraph margins, consecutive line breaks, nested and restarted lists, links, TXT whitespace and a reversed list of 601 items.
+
+## Reader overlays and illustrated EPUBs (2026-11-23)
+
+- The toolbar and progress bar overlay the reading surface. Their visibility preserves the scroll viewport, line breaks and passage position. Fixed space at the beginning and end of the chapter keeps the first and last lines reachable.
+- **Aa** and **More** share a toolbar-aligned popup. The display panel groups settings under **Text**, **Colors** and **Layout** and keeps its title and close action visible while controls scroll.
+- The EPUB reader applies supported publisher typography and shows local illustrations in reading order. Headings, emphasis, relative type sizes, underlines and strikethroughs coexist with the reader's base font, colors and line spacing. Embedded images retain alternative text and confirmed links. New imports retain image-only sections.
+- Presentation data is stored separately from normalized text. Earlier imports can rebuild it from the local EPUB while preserving saved chapter indexes and character offsets. Image-only sections skipped by the earlier importer can still open through an in-book link.
+- On an Android API 37 emulator, a local illustrated EPUB showed its embedded PNG at the correct aspect ratio. The image and the following link kept identical screen coordinates through a hide/show cycle. Confirming the link opened the image-only chapter. An EPUB imported under the earlier reader recovered its illustration after upgrading and opened a previously skipped page as a linked section. In landscape, the display panel scrolled while its close button stayed in place. Expo lint, TypeScript, ten reader regressions and both mobile bundle exports passed. iOS device interaction remains unverified.
+
+## Reader controls and chapter gestures (2026-11-23)
+
+- **Aa** now exposes line height in 0.1× steps from 1.2× to 2.2×. It shares the Reader settings control and supports both the default style and per-book overrides.
+- A tap on the reading surface toggles the toolbar and progress bar. A vertical drag hides both and a tap brings them back. The chapter stays mounted, and the controls remain available when a screen reader is active.
+- A deliberate left swipe opens the next chapter and a right swipe opens the previous one. Both use the existing chapter navigation and position-saving path. A swipe past either end leaves the reader in place.
+- Verified on an Android API 37 emulator with a 600-chapter EPUB and the updated JavaScript bundle in a test-signed copy of the app. Checks covered tap-to-toggle, auto-hide during vertical scrolling, link confirmation, both swipe directions, and the first and last chapter boundaries. A per-book line height of 2.2× persisted after reopening while the default stayed at 1.6×. Expo lint, TypeScript, all eight reader regressions, and the iOS bundle export passed. iOS touch behavior still needs a device check.
+
 ## Adaptive layouts, History search and reader links (2026-11-23)
 
 - Library category labels and counts, including zero, use native theme colors. Selected controls choose a foreground based on the fill color. Rotating the device updates the grid and reader layout. Display settings and the Library order prompt scroll in short viewports.

@@ -1,62 +1,46 @@
-import { File, FileMode } from 'expo-file-system';
+import { scanEntries } from './archiveEntries';
 import * as FS from 'expo-file-system/legacy';
-import { Unzip, UnzipInflate, strFromU8 } from 'fflate';
+import { strFromU8 } from 'fflate';
 import { extractChapterHtml } from './chapterHtml';
+import { cacheAsset, emptyAssets, isPublicationAsset, loadAssets, saveAssets } from './publicationAssets';
+import type { PublicationAssets } from './publisherStyle';
 import { packagePath, resolvePath } from './importEpub';
-import type { ChapterNavigation } from '../types';
+import { presentationFile, type ChapterNavigation } from '../types';
 import type { ChapterRow } from '@/db/repositories/chapters';
 
-type EntryHandler = (data: Uint8Array) => Promise<void> | void;
 const rebuilding = new Map<string, Promise<void>>();
+const preparingAssets = new Map<string, Promise<PublicationAssets>>();
 
 function cachePath(dir: string, index: number) {
-  return dir + '/' + String(index).padStart(4, '0') + '.links.json';
+  return dir + '/' + presentationFile(index);
 }
 
-/** Stream older archives in bounded reads and inflate only requested XHTML entries. */
-async function scanEntries(uri: string, select: (name: string) => EntryHandler | undefined, done: () => boolean) {
-  const pending: Promise<void>[] = [];
-  const unzip = new Unzip((entry) => {
-    const consume = select(entry.name.replace(/^\.\//, '').replace(/^\//, ''));
-    if (!consume) return;
-    const pieces: Uint8Array[] = [];
-    let length = 0;
-    entry.ondata = (error, data, final) => {
-      if (error) throw error;
-      pieces.push(data);
-      length += data.length;
-      if (!final) return;
-      const bytes = new Uint8Array(length);
-      let offset = 0;
-      for (const piece of pieces) { bytes.set(piece, offset); offset += piece.length; }
-      pending.push(Promise.resolve(consume(bytes)));
-    };
-    entry.start();
-  });
-  unzip.register(UnzipInflate);
-  const handle = new File(uri).open(FileMode.ReadOnly);
-  try {
-    while (!done()) {
-      const bytes = await handle.readBytes(128 * 1024);
-      unzip.push(bytes, bytes.length === 0);
-      await Promise.all(pending.splice(0));
-      if (!bytes.length) break;
-    }
-  } finally {
-    handle.close();
+async function assetsFor(uri: string, dir: string) {
+  let work = preparingAssets.get(dir);
+  if (!work) {
+    work = loadAssets(dir).catch(async () => {
+      const assets = emptyAssets();
+      await scanEntries(uri, (name) => isPublicationAsset(name)
+        ? (bytes) => cacheAsset(assets, dir, name, bytes) : undefined, () => false);
+      await saveAssets(dir, assets);
+      return assets;
+    }).finally(() => preparingAssets.delete(dir));
+    preparingAssets.set(dir, work);
   }
+  return work;
 }
 
-/** Footnotes and appendices may live outside the reading spine. */
-export async function readSupplement(uri: string, path: string) {
+export async function readSupplement(uri: string, path: string, dir: string) {
+  const assets = await assetsFor(uri, dir);
   let result: ReturnType<typeof extractChapterHtml> | undefined;
   await scanEntries(uri, (name) => name === path
-    ? (bytes) => { result = extractChapterHtml(strFromU8(bytes)); } : undefined, () => !!result);
-  if (!result?.text) throw new Error('Linked section is unavailable');
+    ? (bytes) => { result = extractChapterHtml(strFromU8(bytes), path, assets); } : undefined, () => !!result);
+  if (!result || (!result.text && !result.navigation.images?.length)) throw new Error('Linked section is unavailable');
   return result;
 }
 
 async function rebuild(uri: string, dir: string, rows: ChapterRow[]) {
+  const assets = await assetsFor(uri, dir);
   let opf: string | undefined;
   await scanEntries(uri, (name) => name === 'META-INF/container.xml'
     ? (bytes) => { opf = packagePath(bytes); } : undefined, () => !!opf);
@@ -75,11 +59,15 @@ async function rebuild(uri: string, dir: string, rows: ChapterRow[]) {
     if (!matching) return;
     return async (bytes) => {
       paths.delete(name);
-      const { text, navigation } = extractChapterHtml(strFromU8(bytes));
+      const image = assets.images.get(name);
+      const { text, navigation } = image
+        ? { text: '', navigation: { presentationVersion: 2, links: [], anchors: [], images: [{ ...image, offset: 0, alt: '' }] } }
+        : extractChapterHtml(strFromU8(bytes), name, assets);
       for (const row of matching) {
         const file = cachePath(dir, row.chapter_index);
-        const stored = await FS.readAsStringAsync(file.replace('.links.json', '.txt'));
+        const stored = await FS.readAsStringAsync(file.replace('.presentation-v2.json', '.txt'));
         if (text !== stored) continue;
+        if ((await FS.getInfoAsync(file)).exists) continue;
         await FS.writeAsStringAsync(file + '.tmp', JSON.stringify({ ...navigation, packageDir }));
         await FS.moveAsync({ from: file + '.tmp', to: file });
       }
@@ -98,7 +86,13 @@ export async function chapterNavigation(uri: string, dir: string, rows: ChapterR
       work = rebuild(uri, dir, rows).finally(() => rebuilding.delete(dir));
       rebuilding.set(dir, work);
     }
-    await work;
-    return read();
+    try {
+      await work;
+      return await read();
+    } catch {
+      const old = path.replace('.presentation-v2.json', '.presentation.json');
+      const cached = await FS.readAsStringAsync(old).catch(() => FS.readAsStringAsync(old.replace('.presentation.json', '.links.json')));
+      return JSON.parse(cached) as ChapterNavigation;
+    }
   }
 }

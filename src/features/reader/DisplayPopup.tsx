@@ -1,12 +1,13 @@
-import React from 'react';
-import { Modal, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import React, { useState } from 'react';
+import { Pressable, ScrollView, Text, View } from 'react-native';
+import { ReaderOptionsPopup } from './ReaderOptionsPopup';
+import { IconButton } from '@/components/ui/icon';
 
 import { Chip, ColorSwatches, SectionLabel, SegmentedControl, SliderRow } from '@/components/ui/controls';
 import { useAppTheme } from '@/theme/ThemeProvider';
 import { contrastText } from '@/lib/color';
 import type { ReadingStyle } from '@/lib/settingsKeys';
-import { BG_SWATCHES, TX_SWATCHES } from './ReadingStyleEditor';
+import { BG_SWATCHES, LineHeightControl, TX_SWATCHES } from './ReadingStyleEditor';
 
 /** Prototype theme swatches: [background, text] pairs. */
 const THEME_SWATCHES: readonly (readonly [string, string, string])[] = [
@@ -22,6 +23,7 @@ const THEME_SWATCHES: readonly (readonly [string, string, string])[] = [
  */
 export function DisplayPopup({
   visible,
+  toolbarHeight,
   onClose,
   style,
   scope,
@@ -33,6 +35,7 @@ export function DisplayPopup({
   onPatch,
 }: {
   visible: boolean;
+  toolbarHeight: number;
   onClose: () => void;
   style: ReadingStyle;
   scope: 'all' | 'book';
@@ -44,141 +47,59 @@ export function DisplayPopup({
   onBrightness: (v: number) => void;
   onPatch: (patch: Partial<ReadingStyle>) => void;
 }) {
-  const insets = useSafeAreaInsets();
-  const { height } = useWindowDimensions();
-  const top = insets.top + 64;
+  const [tab, setTab] = useState<'text' | 'colors' | 'layout'>('text');
   const { accent, colors } = useAppTheme();
 
   return (
-    <Modal
-      supportedOrientations={['portrait', 'landscape']} visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View className="flex-1">
-        <Pressable className="absolute inset-0 bg-black/55" onPress={onClose} />
-        <View
-          className="absolute bg-surface rounded-xl"
-          style={{ top, left: insets.left + 12, right: insets.right + 40, maxHeight: Math.max(0, height - top - insets.bottom - 12) }}>
-          <ScrollView contentContainerStyle={{ paddingVertical: 8 }}>
-            {/* Scope: prototype omits this; the plan requires it (5.6.1). */}
-            <View className="px-4 pt-1 pb-2">
-              <SegmentedControl
-                options={[
-                  ['all', 'All books'],
-                  ['book', 'This book only'],
-                ]}
-                value={scope}
-                onChange={onScopeChange}
-              />
-            </View>
-            {scope === 'book' && hasOverride && (
-              <View className="px-4 pb-1">
-                <Chip label="Reset this book" onPress={onResetBook} />
-              </View>
-            )}
-
-            <SectionLabel>Flow</SectionLabel>
-            <View className="px-4">
-              <SegmentedControl
-                options={[
-                  ['auto', 'Auto'],
-                  ['paged', 'Paged'],
-                  ['scrolled', 'Scrolled'],
-                ]}
-                value={style.flow}
-                onChange={(flow) => onPatch({ flow })}
-              />
-            </View>
-
-            <SectionLabel>Brightness</SectionLabel>
-            <View className="px-4">
-              <SliderRow
-                label="Screen"
-                value={brightness}
-                display={`${brightness}%`}
-                min={20}
-                max={100}
-                step={5}
-                onChange={onBrightness}
-              />
-            </View>
-
-            <SectionLabel>Theme</SectionLabel>
-            <View className="px-4 flex-row flex-wrap">
-              {THEME_SWATCHES.map(([bg, tx, name]) => {
-                const on = style.bg.toLowerCase() === bg && style.tx.toLowerCase() === tx;
-                return (
-                  <Pressable
-                    key={name}
-                    accessibilityRole="button"
-                    accessibilityLabel={name}
-                    accessibilityState={{ selected: on }}
-                    onPress={() => onPatch({ bg, tx })}
-                    className="w-11 h-11 rounded-full mr-3 mb-2 items-center justify-center"
-                    style={{
-                      backgroundColor: bg,
-                      borderWidth: 2,
-                      borderColor: on ? accent.hex : colors.ln,
-                    }}>
-                    {on && <Text className="text-[14px] font-bold" style={{ color: tx }}>✓</Text>}
-                  </Pressable>
-                );
-              })}
-            </View>
-            <View className="px-4">
-              <ColorSwatches
-                label="Background"
-                value={style.bg}
-                options={BG_SWATCHES}
-                onChange={(bg) => onPatch({ bg, tx: contrastText(bg) })}
-              />
-              <ColorSwatches
-                label="Text"
-                value={style.tx}
-                options={TX_SWATCHES}
-                onChange={(tx) => onPatch({ tx })}
-              />
-            </View>
-
-            <SectionLabel>Text size</SectionLabel>
-            <View className="px-4">
-              <SliderRow
-                label="Size"
-                value={style.size}
-                display={`${style.size}%`}
-                min={60}
-                max={200}
-                step={10}
-                onChange={(size) => onPatch({ size })}
-              />
-            </View>
-
-            <SectionLabel>Text align</SectionLabel>
-            <View className="px-4">
-              <SegmentedControl
-                options={[
-                  ['left', 'Left'],
-                  ['justify', 'Justify'],
-                ]}
-                value={style.align}
-                onChange={(align) => onPatch({ align })}
-              />
-            </View>
-
-            <SectionLabel>Margin</SectionLabel>
-            <View className="px-4">
-              <SliderRow
-                label="Margin"
-                value={style.mar}
-                display={`${style.mar}%`}
-                min={0}
-                max={10}
-                step={1}
-                onChange={(mar) => onPatch({ mar })}
-              />
-            </View>
-            <View className="h-3" />
-          </ScrollView>
-        </View>
+    <ReaderOptionsPopup visible={visible} onClose={onClose} toolbarHeight={toolbarHeight} wide>
+      <View className="flex-row items-center px-4 py-1 border-b border-line">
+        <Text className="flex-1 text-tx font-ui text-lg font-semibold">Reading display</Text>
+        <IconButton icon="close" label="Close display settings" onPress={onClose} />
       </View>
-    </Modal>
+      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 12 }}>
+        <SectionLabel>Apply to</SectionLabel>
+        <SegmentedControl options={[['all', 'All books'], ['book', 'This book only']]} value={scope} onChange={onScopeChange} />
+        {scope === 'book' && hasOverride && <Chip label="Reset this book" onPress={onResetBook} />}
+        <View className="my-3">
+          <SegmentedControl options={[['text', 'Text'], ['colors', 'Colors'], ['layout', 'Layout']]} value={tab} onChange={setTab} />
+        </View>
+        {tab === 'text' && <>
+          <SliderRow label="Text size" value={style.size} display={style.size + '%'} min={60} max={200}
+            step={10} onChange={(size) => onPatch({ size })} />
+          <LineHeightControl value={style.lh} onChange={onPatch} />
+          <SectionLabel>Alignment</SectionLabel>
+          <SegmentedControl options={[['left', 'Left'], ['justify', 'Justify']]} value={style.align}
+            onChange={(align) => onPatch({ align })} />
+        </>}
+        {tab === 'layout' && <>
+          <SliderRow label="Side margins" value={style.mar} display={style.mar + '%'} min={0} max={10}
+            step={1} onChange={(mar) => onPatch({ mar })} />
+          <SectionLabel>Reading flow</SectionLabel>
+          <SegmentedControl options={[['auto', 'Auto'], ['paged', 'Paged'], ['scrolled', 'Scrolled']]}
+            value={style.flow} onChange={(flow) => onPatch({ flow })} />
+        </>}
+        {tab === 'colors' && <>
+          <SectionLabel>Theme</SectionLabel>
+          <View className="flex-row flex-wrap">
+            {THEME_SWATCHES.map(([bg, tx, name]) => {
+              const selected = style.bg.toLowerCase() === bg && style.tx.toLowerCase() === tx;
+              return (
+                <Pressable key={name} accessibilityRole="button" accessibilityLabel={name}
+                  accessibilityState={{ selected }} onPress={() => onPatch({ bg, tx })}
+                  className="rounded-lg mr-2 mb-2 items-center justify-center px-3 py-2"
+                  style={{ backgroundColor: bg, borderWidth: 2, borderColor: selected ? accent.hex : colors.ln }}>
+                  <Text style={{ color: tx }}>{name}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <ColorSwatches label="Background" value={style.bg} options={BG_SWATCHES}
+            onChange={(bg) => onPatch({ bg, tx: contrastText(bg) })} />
+          <ColorSwatches label="Text" value={style.tx} options={TX_SWATCHES} onChange={(tx) => onPatch({ tx })} />
+          <SliderRow label="Screen brightness" value={brightness} display={brightness + '%'} min={20}
+            max={100} step={5} onChange={onBrightness} />
+        </>}
+      </ScrollView>
+    </ReaderOptionsPopup>
   );
 }

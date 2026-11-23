@@ -37,7 +37,7 @@ export function resolveBookLink(href: string, source: string, sources: (string |
 }
 
 /** Find the first link whose end is beyond this visible chunk. */
-export function linksInRange(links: BookLink[], start: number, end: number) {
+export function linksInRange<T extends { start: number; end: number }>(links: T[], start: number, end: number) {
   let lo = 0, hi = links.length;
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;
