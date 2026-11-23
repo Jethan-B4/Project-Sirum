@@ -20,6 +20,7 @@ export function BottomSheet({
   const insets = useSafeAreaInsets();
   return (
     <Modal
+      supportedOrientations={['portrait', 'landscape']}
       visible={visible}
       transparent
       animationType="slide"

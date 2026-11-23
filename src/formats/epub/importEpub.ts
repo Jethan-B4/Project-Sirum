@@ -2,9 +2,10 @@ import { XMLParser } from 'fast-xml-parser';
 import * as fflate from 'fflate';
 import { File, FileMode } from 'expo-file-system';
 import * as FileSystem from 'expo-file-system/legacy';
+import { extractChapterHtml } from './chapterHtml';
 import * as htmlparser2 from 'htmlparser2';
 
-import { normalizeText, NORMALIZATION_VERSION } from '@/text/normalize';
+import { NORMALIZATION_VERSION } from '@/text/normalize';
 import type { Chapter, ImportedBook } from '../types';
 
 interface EpubOpts {
@@ -13,40 +14,7 @@ interface EpubOpts {
   sizeBytes: number;
 }
 
-const BLOCK_TAGS = new Set([
-  'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-  'li', 'blockquote', 'pre', 'tr', 'section', 'article',
-  'header', 'footer', 'aside', 'nav', 'main', 'figure', 'figcaption',
-]);
-
-const IGNORE_TAGS = new Set(['head', 'style', 'script', 'svg', 'noscript']);
-
-function decodeHtmlEntities(str: string): string {
-  return str
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, dec) => {
-      try {
-        return String.fromCharCode(parseInt(dec, 10));
-      } catch {
-        return '';
-      }
-    })
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => {
-      try {
-        return String.fromCharCode(parseInt(hex, 16));
-      } catch {
-        return '';
-      }
-    })
-    .replace(/\u00AD/g, ''); // soft hyphen
-}
-
-function resolvePath(baseDir: string, relativePath: string): string {
+export function resolvePath(baseDir: string, relativePath: string): string {
   const clean = decodeURIComponent(relativePath.split('#')[0].split('?')[0]);
   const combined = baseDir ? `${baseDir}/${clean}` : clean;
   const parts = combined.split('/');
@@ -60,94 +28,6 @@ function resolvePath(baseDir: string, relativePath: string): string {
     }
   }
   return stack.join('/');
-}
-
-function extractTextAndHeadingFromHtml(html: string): { text: string; firstHeading?: string } {
-  const paragraphs: string[] = [];
-  let currentPara: string[] = [];
-  let ignoreDepth = 0;
-  let inPre = false;
-  let headingDepth = 0;
-  let headingBuffer: string[] = [];
-  let firstHeading: string | undefined;
-
-  const flushPara = () => {
-    if (currentPara.length > 0) {
-      const line = currentPara.join('');
-      const normalized = inPre ? line : line.replace(/[ \t\r\n]+/g, ' ').trim();
-      if (normalized.length > 0) {
-        paragraphs.push(normalized);
-      }
-      currentPara = [];
-    }
-  };
-
-  const parser = new htmlparser2.Parser(
-    {
-      onopentag(name) {
-        const tag = name.toLowerCase();
-        if (IGNORE_TAGS.has(tag)) {
-          ignoreDepth++;
-          return;
-        }
-        if (ignoreDepth > 0) return;
-
-        if (tag === 'pre') inPre = true;
-
-        if (BLOCK_TAGS.has(tag) || tag === 'br') {
-          flushPara();
-        }
-
-        if (/^h[1-6]$/.test(tag) && !firstHeading) {
-          headingDepth++;
-        }
-      },
-      ontext(text) {
-        if (ignoreDepth > 0) return;
-        const decoded = decodeHtmlEntities(text);
-        currentPara.push(decoded);
-        if (headingDepth > 0 && !firstHeading) {
-          headingBuffer.push(decoded);
-        }
-      },
-      onclosetag(name) {
-        const tag = name.toLowerCase();
-        if (IGNORE_TAGS.has(tag)) {
-          if (ignoreDepth > 0) ignoreDepth--;
-          return;
-        }
-        if (ignoreDepth > 0) return;
-
-        if (tag === 'pre') inPre = false;
-
-        if (BLOCK_TAGS.has(tag)) {
-          flushPara();
-        }
-
-        if (/^h[1-6]$/.test(tag) && headingDepth > 0) {
-          headingDepth--;
-          if (headingDepth === 0 && !firstHeading) {
-            const h = headingBuffer.join('').replace(/\s+/g, ' ').trim();
-            if (h.length > 0 && h.length < 120) {
-              firstHeading = h;
-            }
-            headingBuffer = [];
-          }
-        }
-      },
-    },
-    { decodeEntities: true }
-  );
-
-  parser.write(html);
-  parser.end();
-  flushPara();
-
-  const joined = paragraphs.join('\n');
-  return {
-    text: normalizeText(joined),
-    firstHeading,
-  };
 }
 
 function base64ToUint8Array(b64: string): Uint8Array {
@@ -225,6 +105,25 @@ function archivePath(rawKey: string) {
   return rawKey.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\//, '');
 }
 
+const xmlParser = new XMLParser({
+    ignoreAttributes: false,
+    attributeNamePrefix: '@_',
+    removeNSPrefix: true,
+  });
+
+export function packagePath(containerBytes: Uint8Array): string {
+  const containerXml = fflate.strFromU8(containerBytes);
+  const containerObj = xmlParser.parse(containerXml);
+  const rootfiles = containerObj?.container?.rootfiles?.rootfile;
+  const rootfileList = Array.isArray(rootfiles) ? rootfiles : [rootfiles];
+  const mainRootfile = rootfileList.find(
+    (rf: any) => rf?.['@_media-type'] === 'application/oebps-package+xml' || rf?.['@_full-path']
+  );
+  return (mainRootfile?.['@_full-path'] || 'OEBPS/content.opf')
+    .replace(/^\.\//, '')
+    .replace(/^\//, '');
+}
+
 function packageInfo(entry: (name: string) => Uint8Array | undefined) {
   // 1. Check for DRM
   const encryptionBytes = entry('META-INF/encryption.xml');
@@ -249,22 +148,7 @@ function packageInfo(entry: (name: string) => Uint8Array | undefined) {
   if (!containerBytes) {
     throw new Error('Invalid EPUB: META-INF/container.xml is missing.');
   }
-  const containerXml = fflate.strFromU8(containerBytes);
-  const xmlParser = new XMLParser({
-    ignoreAttributes: false,
-    attributeNamePrefix: '@_',
-    removeNSPrefix: true,
-  });
-  const containerObj = xmlParser.parse(containerXml);
-  const rootfiles = containerObj?.container?.rootfiles?.rootfile;
-  const rootfileList = Array.isArray(rootfiles) ? rootfiles : [rootfiles];
-  const mainRootfile = rootfileList.find(
-    (rf: any) => rf?.['@_media-type'] === 'application/oebps-package+xml' || rf?.['@_full-path']
-  );
-  const opfPath = (mainRootfile?.['@_full-path'] || 'OEBPS/content.opf')
-    .replace(/^\.\//, '')
-    .replace(/^\//, '');
-
+  const opfPath = packagePath(containerBytes);
   const opfBytes = entry(opfPath);
   if (!opfBytes) {
     throw new Error(`Invalid EPUB: package document at "${opfPath}" not found.`);
@@ -483,8 +367,13 @@ export async function importEpub(uri: string, opts: EpubOpts): Promise<ImportedB
   const chapters: Chapter[] = [];
   let currentOffset = 0;
   let chapterIndex = 0;
+  let lastYield = Date.now();
 
   for (const itemref of spineList) {
+    if (Date.now() - lastYield >= 12) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      lastYield = Date.now();
+    }
     if (itemref?.['@_linear'] === 'no') continue;
     const idref = itemref?.['@_idref'];
     if (!idref) continue;
@@ -497,7 +386,7 @@ export async function importEpub(uri: string, opts: EpubOpts): Promise<ImportedB
     if (!itemBytes) continue;
 
     const html = fflate.strFromU8(itemBytes);
-    const { text, firstHeading } = extractTextAndHeadingFromHtml(html);
+    const { text, firstHeading, navigation } = extractChapterHtml(html);
 
     // Skip empty spine items (cover pages, blank spacers)
     if (!text.trim()) continue;
@@ -510,6 +399,7 @@ export async function importEpub(uri: string, opts: EpubOpts): Promise<ImportedB
       index: chapterIndex,
       title,
       sourceHref: manifestItem.href,
+      navigation: { ...navigation, packageDir: opfDir },
       startOffset: currentOffset,
       charCount,
       text,

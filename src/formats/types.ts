@@ -1,6 +1,19 @@
+export interface BookLink {
+  start: number;
+  end: number;
+  href: string;
+}
+
+export interface ChapterNavigation {
+  packageDir?: string;
+  links: BookLink[];
+  anchors: [string, number][];
+}
+
 export interface Chapter {
   index: number;        // 0-based position in spine order
   title: string;        // TOC label, first heading, or "Section N"
+  navigation?: ChapterNavigation;
   sourceHref?: string;  // EPUB spine item path / PDF outline target
   startOffset: number;  // global UTF-16 code unit offset into concatenated book text
   charCount: number;

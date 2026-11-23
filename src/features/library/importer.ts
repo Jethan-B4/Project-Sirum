@@ -399,6 +399,9 @@ async function runImport(picked: PickedFile): Promise<ImportResult> {
     for (const ch of book.chapters) {
       const padded = String(ch.index).padStart(4, '0');
       await FileSystem.writeAsStringAsync(`${chaptersDir}/${padded}.txt`, ch.text);
+      if (ch.navigation) {
+        await FileSystem.writeAsStringAsync(chaptersDir + '/' + padded + '.links.json', JSON.stringify(ch.navigation));
+      }
     }
 
     // Normalize the cover once at import (plan 5.2.1): type-sniffed, resized,

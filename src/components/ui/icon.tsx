@@ -1,12 +1,8 @@
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import React from 'react';
 import { Pressable, View } from 'react-native';
 
-import { useColorScheme } from '@/hooks/use-color-scheme';
 import { contrastText } from '@/lib/color';
-import { useSettings } from '@/features/settings/SettingsProvider';
-import { SettingKeys } from '@/lib/settingsKeys';
-import { ThemePalettes, resolveThemeName } from '@/theme/palette';
 import { useAppTheme } from '@/theme/ThemeProvider';
 
 export type IconName = React.ComponentProps<typeof Ionicons>['name'];
@@ -14,15 +10,11 @@ export type IconName = React.ComponentProps<typeof Ionicons>['name'];
 type Tone = 'default' | 'muted' | 'accent' | 'onAccent' | (string & {});
 
 function useIconColor(tone: Tone): string {
-  const { accent } = useAppTheme();
-  const scheme = useColorScheme();
-  const { get } = useSettings();
-  const palette = ThemePalettes[resolveThemeName(get(SettingKeys.deviceTheme), scheme)];
-
+  const { accent, colors } = useAppTheme();
   if (tone === 'accent') return accent.hex;
   if (tone === 'onAccent') return contrastText(accent.hex);
-  if (tone === 'muted') return `rgb(${palette.mu})`;
-  if (tone === 'default') return `rgb(${palette.tx})`;
+  if (tone === 'muted') return colors.mu;
+  if (tone === 'default') return colors.tx;
   return tone; // concrete color passed through
 }
 

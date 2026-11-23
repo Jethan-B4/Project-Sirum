@@ -104,7 +104,7 @@ export function BottomNav() {
               </View>
               <Text
                 className={`font-ui text-[12px] ${on ? '' : 'text-mu'}`}
-                style={on ? { color: contrastText(accent.acb) } : undefined}>
+                style={on ? { color: accent.hex } : undefined}>
                 {item.label}
               </Text>
             </Pressable>
@@ -197,8 +197,8 @@ function SideDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
       style={activeItem ? { backgroundColor: accent.acb } : undefined}>
       <Icon name={icon} size={22} tone={activeItem ? contrastText(accent.acb) : 'default'} />
       <Text
-        className="font-ui text-base"
-        style={activeItem ? { color: contrastText(accent.acb) } : { color: 'rgb(var(--tx))' }}>
+        className="font-ui text-base text-tx"
+        style={activeItem ? { color: contrastText(accent.acb) } : undefined}>
         {label}
       </Text>
     </Pressable>
@@ -249,7 +249,7 @@ export function Screen({
   const navMode = get(SettingKeys.deviceNavMode);
 
   return (
-    <View className="flex-1 bg-bg">
+    <View className="flex-1 bg-bg" style={{ paddingLeft: insets.left, paddingRight: insets.right, paddingBottom: !showNav || navMode === 'side' ? insets.bottom : 0 }}>
       <View style={{ flex: 1, paddingTop: insets.top }}>{children}</View>
       {showNav && navMode === 'bottom' && <BottomNav />}
     </View>

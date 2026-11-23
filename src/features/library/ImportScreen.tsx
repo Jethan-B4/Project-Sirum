@@ -12,7 +12,6 @@ import {
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Icon } from '@/components/ui/icon';
 import { contrastText } from '@/lib/color';
 import { useAppTheme } from '@/theme/ThemeProvider';
@@ -128,7 +127,6 @@ export default function ImportScreen() {
   const locked = useRef(false);
   const busy = activity.length > 0;
   const { accent } = useAppTheme();
-  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     AsyncStorage.getItem(SCAN_URI_KEY)
@@ -265,12 +263,11 @@ export default function ImportScreen() {
 
   const reviewing = effectiveTab === 'scan' && scan != null;
   const selected = scan?.files.filter((file) => file.selected) ?? [];
-  const footerPadding = navMode === 'side' ? Math.max(insets.bottom, 12) : 12;
 
   return (
     <Screen>
       <AppBar title="Import" leading={navMode === 'side' ? 'menu' : 'none'} />
-      <View className="flex-1 px-3 pt-2" style={{ paddingBottom: footerPadding }}>
+      <View className="flex-1 px-3 pt-2 pb-3">
         {scanSupported && (
           <View className="mb-3">
             <SegmentedControl<ImportMethod>

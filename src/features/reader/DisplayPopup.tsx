@@ -1,8 +1,9 @@
 import React from 'react';
-import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Chip, ColorSwatches, SectionLabel, SegmentedControl, SliderRow } from '@/components/ui/controls';
+import { useAppTheme } from '@/theme/ThemeProvider';
 import { contrastText } from '@/lib/color';
 import type { ReadingStyle } from '@/lib/settingsKeys';
 import { BG_SWATCHES, TX_SWATCHES } from './ReadingStyleEditor';
@@ -44,14 +45,18 @@ export function DisplayPopup({
   onPatch: (patch: Partial<ReadingStyle>) => void;
 }) {
   const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
+  const top = insets.top + 64;
+  const { accent, colors } = useAppTheme();
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal
+      supportedOrientations={['portrait', 'landscape']} visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View className="flex-1">
         <Pressable className="absolute inset-0 bg-black/55" onPress={onClose} />
         <View
-          className="absolute bg-surface rounded-xl left-3 right-10"
-          style={{ top: insets.top + 64, maxHeight: '75%' }}>
+          className="absolute bg-surface rounded-xl"
+          style={{ top, left: insets.left + 12, right: insets.right + 40, maxHeight: Math.max(0, height - top - insets.bottom - 12) }}>
           <ScrollView contentContainerStyle={{ paddingVertical: 8 }}>
             {/* Scope: prototype omits this; the plan requires it (5.6.1). */}
             <View className="px-4 pt-1 pb-2">
@@ -111,7 +116,7 @@ export function DisplayPopup({
                     style={{
                       backgroundColor: bg,
                       borderWidth: 2,
-                      borderColor: on ? 'rgb(var(--ac))' : 'rgb(var(--ln))',
+                      borderColor: on ? accent.hex : colors.ln,
                     }}>
                     {on && <Text className="text-[14px] font-bold" style={{ color: tx }}>✓</Text>}
                   </Pressable>

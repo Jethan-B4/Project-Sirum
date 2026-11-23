@@ -3,6 +3,7 @@ import { Modal, FlatList, Pressable, ScrollView, Text, View, useWindowDimensions
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAppTheme } from '@/theme/ThemeProvider';
+import { contrastText } from '@/lib/color';
 import { Icon, type IconName } from '@/components/ui/icon';
 import type { BookmarkRow } from '@/db/repositories/bookmarks';
 import type { HighlightRow } from '@/db/repositories/highlights';
@@ -90,12 +91,13 @@ export function ContentsPanel({
       : undefined;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal
+      supportedOrientations={['portrait', 'landscape']} visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View className="flex-1 flex-row justify-end">
         <Pressable className="absolute inset-0 bg-black/55" onPress={onClose} />
         <View
           className="bg-surface h-full"
-          style={{ width: '78%', maxWidth: 340, paddingTop: insets.top }}>
+          style={{ width: '78%', maxWidth: 340, paddingTop: insets.top, paddingRight: insets.right, paddingBottom: insets.bottom }}>
           {/* Tab bar */}
           <View className="flex-row border-b border-line pt-3">
             {TABS.map(([key, icon, label]) => {
@@ -134,7 +136,7 @@ export function ContentsPanel({
                     <Text
                       numberOfLines={2}
                       className="font-ui text-tx text-[15px]"
-                      style={on ? { color: accent.hex } : undefined}>
+                      style={on ? { color: contrastText(accent.hexStrong) } : undefined}>
                       {ch.title ?? `Chapter ${i + 1}`}
                     </Text>
                   </Pressable>

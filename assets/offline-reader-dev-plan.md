@@ -25,16 +25,20 @@
 | 11 | **Settings and display** | A categorized settings hub (Appearance, Library, Reader, Import and storage, Sync, About). App color theme, accent color, and app font are device-local. The reading style (font family, weight, size, line height, margins, background and text color) has a synced default plus optional **per-book overrides**. The library can hide format/progress badges and title/author. |
 | 12 | **Reader screen** | Layout, contents/annotations/bookmarks panel, display popup (flow, brightness, theme, text size, align, margin), and in-book search follow `sirum-reader-prototype.html` (5.6.1) |
 | 13 | **Covers** | Covers are normalized at import and always shown in full, never cropped or stretched (5.2.1) |
+| 14 | **Packaged app size** | Each production Android App Bundle, distributed APK and iOS IPA must be at most **100 MB (100,000,000 bytes)**. Measure the finished package, including native libraries and bundled assets. Books imported after installation are user data. |
 
 ---
 
-## Current Status (2026-11-22)
+## Current Status (2026-11-23)
 
 Implementation tracking lives in `development-progress.md`. Compared with this plan, the project is further along in Phase 3 and has some differences:
 
 - **Built and working:** TXT and EPUB import and reading, library (grid/list, filters, order modes), history, import (manual picker and Android folder scan), the categorized settings hub, app themes and fonts, per-book reading style, ask-once prompts, progress save and restore, and the reader screen with the Aa sheet.
 - **Differences from the plan:** styling uses NativeWind v4 with CSS-variable theme tokens; routes live in `src/app/`, shared UI in `src/components/`, theming in `src/theme/`, and settings in `src/features/settings/` (see 3.2). Import stages files through a multi-strategy helper (5.1).
 - **Reader and import updates:** Contents, bookmarks, in-book search, cover normalization and import reports are implemented. Books open at the selected chapter and render a moving window of text chunks. Interrupted imports can be retried, and repeat imports can repair a legacy cover.
+- **Adaptive interface.** Library categories show labels and counts, including zero, in both themes. The grid responds to viewport width and text scale. Portrait and landscape layouts use safe-area insets. History supports a local title, author and chapter search alongside its own filters and ordering.
+- **Links in the reader.** EPUB labels retain their link ranges and target anchors in normalized chapter text. TXT web addresses are also actionable. Tapping a blue link shows its destination and requires confirmation before opening an external address or moving within the book. Linked EPUB footnotes outside the chapter sequence open separately.
+- **Release checks.** Run `npm run check:package-size -- <package-path>` on each production binary. The production EAS success hook runs the same check. Exercise a 500+ page book in a release build on a lower-end phone, including continuous scrolling, chapter jumps, search and rotation. Record frame timing and memory alongside release package size.
 - **Remaining work:** Device performance measurements, paged flow, highlight and note creation, PDF extraction, reactive repository reads, Google sign-in and sync. The Supabase SQL still needs live verification.
 
 ---
@@ -1388,7 +1392,7 @@ Collect real files covering: EPUB 2 and EPUB 3; nested TOC; no TOC; TOC pointing
 | **M6** | Backend | 🟡 Partial | SQL is written. Verify RLS, triggers, and the cross-user test against the live project. |
 | **M7** | Google sign-in | ⬜ Not started | EAS development build, sign in and out, optional-auth flows. |
 | **M8** | Sync v1 | ⬜ Not started | Push/pull, "Not on this device", status UI, two-device test. |
-| **M9** | Hardening | ⬜ Not started | Offline, failure, security, and performance tests; EPUB corpus (9.2). |
+| **M9** | Hardening | Partial | Large-book regression tests and Android emulator coverage are in place. Profile release builds on lower-end physical devices and expand the EPUB corpus (9.2). |
 | **M10** | Beta | ⬜ Not started | TestFlight / Play internal testing. |
 | **M11** | Release | ⬜ Not started | Store submission, monitoring, rollback plan. |
 

@@ -1,7 +1,7 @@
 import { Image } from 'expo-image';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, Modal, Pressable, Text, View, useWindowDimensions } from 'react-native';
+import { Alert, Linking, AppState, Modal, Pressable, Text, View, useWindowDimensions } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import Slider from '@react-native-community/slider';
 import * as Brightness from 'expo-brightness';
@@ -22,7 +22,10 @@ import {
   SettingKeys,
   type ReadingStyle,
 } from '@/lib/settingsKeys';
-import { contrastText } from '@/lib/color';
+import { chapterNavigation, readSupplement } from '@/formats/epub/navigationCache';
+import type { ChapterNavigation } from '@/formats/types';
+import { plainLinks, resolveBookLink, linksInRange } from '@/text/links';
+import { contrastText, linkColor } from '@/lib/color';
 import { chunkChapter } from '@/text/chunk';
 import { useAppTheme } from '@/theme/ThemeProvider';
 import { ThemePalettes } from '@/theme/palette';
@@ -94,6 +97,15 @@ function BookReader({ id }: { id: string }) {
   const [ready, setReady] = useState(false);
   const activeText = loaded?.index === chIdx ? loaded.text : null;
   const chunks = useMemo(() => chunkChapter(chIdx, activeText ?? '', 0), [chIdx, activeText]);
+  const [chapterNav, setChapterNav] = useState<{ index: number; data: ChapterNavigation } | null>(null);
+  const nav = chapterNav?.index === chIdx ? chapterNav.data : null;
+  const plain = useMemo(() => plainLinks(activeText ?? ''), [activeText]);
+  const links = useMemo(() => {
+    if (!nav?.links.length) return plain;
+    const extra = plain.filter((link) => !linksInRange(nav.links, link.start, link.end).length);
+    return extra.length ? [...nav.links, ...extra].sort((a, b) => a.start - b.start) : nav.links;
+  }, [nav, plain]);
+  const sources = useMemo(() => chs.map((row) => row.source_href), [chs]);
   const ch = chs[chIdx];
   const charCount = doc?.char_count ?? 0;
   const pending = useRef<ProgressInput | null>(null);
@@ -154,6 +166,15 @@ function BookReader({ id }: { id: string }) {
     return () => { cancelled = true; };
   }, [ch, chIdx, readChapter]);
 
+  useEffect(() => {
+    if (!ch || doc?.format !== 'epub' || !doc.local_uri || !doc.text_dir) return;
+    let active = true;
+    chapterNavigation(doc.local_uri, doc.text_dir, chs, ch.chapter_index)
+      .then((data) => { if (active) setChapterNav({ index: chIdx, data }); })
+      .catch(() => { if (active) toast('Embedded links could not be loaded for this chapter'); });
+    return () => { active = false; };
+  }, [ch, chIdx, doc, chs, toast]);
+
   const readForSearch = useCallback((index: number) =>
     loaded?.index === index ? Promise.resolve(loaded.text) : readChapter(index),
   [loaded, readChapter]);
@@ -161,7 +182,13 @@ function BookReader({ id }: { id: string }) {
   const recordPosition = useCallback((index: number, offset: number) => {
     const row = chs[index];
     const global = row.start_offset + offset;
-    setFrac(row.char_count ? offset / row.char_count : 0);
+    const fraction = row.char_count ? offset / row.char_count : 0;
+    setFrac((previous) => {
+      if (index !== chIdx || Math.round(previous * 100) !== Math.round(fraction * 100)) return fraction;
+      const previousGlobal = row.start_offset + previous * row.char_count;
+      return Math.round(bookPercent(previousGlobal, charCount) * 100) === Math.round(bookPercent(global, charCount) * 100)
+        ? previous : fraction;
+    });
     if (global === lastOffset.current && index === chIdx) return;
     lastOffset.current = global;
     pending.current = {
@@ -183,6 +210,51 @@ function BookReader({ id }: { id: string }) {
     setNavigationRevision((revision) => revision + 1);
   }, [chs, recordPosition]);
 
+  const [supplement, setSupplement] = useState<{
+    section: Awaited<ReturnType<typeof readSupplement>>;
+    path: string; offset: number; revision: number;
+  } | null>(null);
+  const supplementChunks = useMemo(() => chunkChapter(0, supplement?.section.text ?? '', 0), [supplement]);
+  const followLink = useCallback((href: string) => {
+    const source = supplement ? '/' + supplement.path.split('/').map(encodeURIComponent).join('/') : ch?.source_href ?? '';
+    const target = resolveBookLink(href, source, sources, nav?.packageDir);
+    if (target.kind === 'missing') {
+      Alert.alert('Link unavailable', target.address);
+      return;
+    }
+    const proceed = async () => {
+      if (target.kind === 'external') {
+        await Linking.openURL(target.address);
+        return;
+      }
+      if (target.kind === 'supplement') {
+        if (!doc?.local_uri) throw Error();
+        const section = supplement?.path === target.path ? supplement.section : await readSupplement(doc.local_uri, target.path);
+        const offset = target.fragment ? section.navigation.anchors.find(([id]) => id === target.fragment)?.[1] : 0;
+        if (offset == null) throw Error();
+        setSupplement((previous) => ({ section, path: target.path, offset, revision: (previous?.revision ?? 0) + 1 }));
+        return;
+      }
+      let offset = 0;
+      if (target.fragment) {
+        if (!doc?.local_uri || !doc.text_dir) throw Error();
+        const data = target.index === chIdx && nav ? nav :
+          await chapterNavigation(doc.local_uri, doc.text_dir, chs, chs[target.index].chapter_index);
+        const point = data.anchors.find(([id]) => id === target.fragment);
+        if (!point) throw Error();
+        offset = point[1];
+      }
+      setSupplement(null);
+      jumpToChapter(target.index, offset / (chs[target.index].char_count || 1));
+    };
+    Alert.alert(target.kind === 'external' ? 'Open external address?' : 'Go to this passage?',
+      target.address, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: target.kind === 'external' ? 'Open' : 'Go to passage',
+          onPress: () => { void proceed().catch(() => toast('Link destination is unavailable')); } },
+      ], { cancelable: true });
+  }, [ch, chIdx, sources, nav, doc, chs, jumpToChapter, toast, supplement]);
+
   const jumpToOffset = (offset: number) => {
     const index = Math.max(0, chs.findLastIndex((row) => row.start_offset <= offset));
     const row = chs[index];
@@ -199,7 +271,7 @@ function BookReader({ id }: { id: string }) {
   const addBookmark = useCallback(async () => {
     if (!doc || !ch || charCount <= 0) return;
     if (activeText === null) return;
-    const local = Math.round(frac * ch.char_count);
+    const local = Math.max(0, Math.min(ch.char_count, lastOffset.current - ch.start_offset));
     const snippet = activeText.slice(Math.max(0, local - 40), local + 60).replace(/\s+/g, ' ').trim();
     await bookmarksRepo.create({
       id: '',
@@ -212,7 +284,7 @@ function BookReader({ id }: { id: string }) {
     });
     setBms(await bookmarksRepo.list(doc.id));
     toast('Bookmark added');
-  }, [doc, ch, charCount, frac, chIdx, activeText, toast]);
+  }, [doc, ch, charCount, chIdx, activeText, toast]);
 
   const deleteBookmark = useCallback(
     async (bid: string) => {
@@ -348,16 +420,17 @@ function BookReader({ id }: { id: string }) {
             <View className="absolute right-3 z-20 bg-surface-2 rounded-lg py-1.5 w-[62%] max-w-[260px]">
               {(
                 [
-                  ['bookmark', 'Add bookmark', addBookmark],
-                  ['list', 'Contents', () => setOverlay('panel')],
-                  ['settings-outline', 'Settings', () => router.push('/settings-reader' as never)],
+                  ['bookmark', 'Add bookmark'],
+                  ['list', 'Contents'],
+                  ['settings-outline', 'Settings'],
                 ] as const
-              ).map(([icon, label, fn]) => (
+              ).map(([icon, label]) => (
                 <Pressable
                   key={label}
                   onPress={() => {
-                    setOverlay('none');
-                    void fn();
+                    setOverlay(icon === 'list' ? 'panel' : 'none');
+                    if (icon === 'bookmark') void addBookmark();
+                    if (icon === 'settings-outline') router.push('/settings-reader' as never);
                   }}
                   className="flex-row items-center gap-3 px-5 py-3.5">
                   <Icon name={icon} size={18} tone="default" />
@@ -386,8 +459,11 @@ function BookReader({ id }: { id: string }) {
               key={[chIdx, navigationRevision, winWidth, style.fam, style.size, style.lh,
                 style.wt, style.mar, style.align].join('/')}
               chunks={chunks}
+              links={links}
+              linkColor={linkColor(style.bg)}
+              onLink={followLink}
               length={activeText.length}
-              initialOffset={Math.round(frac * ch.char_count)}
+              initialOffset={() => Math.max(0, Math.min(ch.char_count, lastOffset.current - ch.start_offset))}
               margin={marginH}
               textStyle={{ color: style.tx, fontFamily, fontWeight: String(style.wt) as '400',
                 fontSize, lineHeight: Math.round(fontSize * style.lh), textAlign: style.align }}
@@ -496,7 +572,7 @@ function BookReader({ id }: { id: string }) {
             </ChunkedChapter>
 
             {/* Bottom bar: chapter title, percent, scrubber (prototype `.bot`) */}
-            <View className="bg-surface px-5 pt-3.5 pb-4">
+            <View className={winHeight < 480 ? "bg-surface px-4 py-1" : "bg-surface px-5 pt-3.5 pb-4"}>
               <View className="flex-row justify-between items-center gap-3 mb-2">
                 <Text
                   numberOfLines={1}
@@ -526,6 +602,27 @@ function BookReader({ id }: { id: string }) {
           </>
         )}
       </View>
+
+      {supplement && (
+        <Modal
+          supportedOrientations={['portrait', 'landscape']} visible animationType="fade" onRequestClose={() => setSupplement(null)}>
+          <Screen showNav={false}>
+            <View style={{ flex: 1, backgroundColor: style.bg }}>
+              <View className="flex-row items-center gap-2 px-3 py-2">
+                <Text numberOfLines={1} className="flex-1 font-ui font-semibold" style={{ color: style.tx }}>
+                  {supplement.section.firstHeading ?? supplement.path}
+                </Text>
+                <IconButton icon="close" label="Return to reading" tone={style.tx} onPress={() => setSupplement(null)} />
+              </View>
+              <ChunkedChapter key={supplement.revision} chunks={supplementChunks}
+                length={supplement.section.text.length} links={supplement.section.navigation.links}
+                linkColor={linkColor(style.bg)} onLink={followLink} initialOffset={supplement.offset}
+                margin={marginH} textStyle={{ color: style.tx, fontFamily, fontSize, lineHeight: Math.round(fontSize * style.lh) }}
+                onMove={() => {}} footer={null}>{null}</ChunkedChapter>
+            </View>
+          </Screen>
+        </Modal>
+      )}
 
       {/* Overflow panel: contents / annotations / bookmarks */}
       <ContentsPanel
@@ -569,7 +666,8 @@ function BookReader({ id }: { id: string }) {
       />
 
       {/* Ask-once: progress display mode (plan 5.8) */}
-      <Modal visible={pmPrompt} transparent animationType="fade" onRequestClose={() => setPmDismissed(true)}>
+      <Modal
+        supportedOrientations={['portrait', 'landscape']} visible={pmPrompt} transparent animationType="fade" onRequestClose={() => setPmDismissed(true)}>
         <View className="flex-1 items-center justify-center bg-black/60 px-6">
           <View className="bg-surface rounded-[20px] p-5 w-full max-w-[340px]">
             <Text className="font-ui text-tx text-lg font-semibold">How should reading progress be shown?</Text>

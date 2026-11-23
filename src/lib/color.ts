@@ -28,11 +28,19 @@ export function relativeLuminance(hex: string): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
-/**
- * Readable foreground for a background: near-black on light backgrounds,
- * white on dark ones. Threshold ~0.45 keeps mid-tone accents (e.g. the green
- * accent) on white text while pale surfaces get dark text.
- */
+/** Choose the foreground with the higher contrast against a solid background. */
 export function contrastText(bg: string): string {
-  return relativeLuminance(bg) > 0.45 ? '#0b0b0d' : '#ffffff';
+  const luminance = relativeLuminance(bg) + 0.05;
+  return luminance / 0.05 >= 1.05 / luminance ? '#000000' : '#ffffff';
+}
+
+/** Select a blue suited to the reader's own background, including custom themes. */
+export function linkColor(bg: string): string {
+  const background = relativeLuminance(bg) + 0.05;
+  const dark = '#00266b';
+  const light = '#9ecaff';
+  if (background / (relativeLuminance(dark) + 0.05) >= 4.5) return dark;
+  if ((relativeLuminance(light) + 0.05) / background >= 4.5) return light;
+  const navy = '#000019';
+  return background / (relativeLuminance(navy) + 0.05) >= 4.5 ? navy : '#fafdff';
 }

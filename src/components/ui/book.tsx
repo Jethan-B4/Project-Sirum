@@ -169,7 +169,7 @@ interface CardProps {
 export function BookCard({ book, gridSize, showBadges, showDetails, onPress }: CardProps) {
   const overlay = gridSize >= 3;
   const p = pct(book);
-  const { isDark } = useAppTheme();
+  const { isDark, accent } = useAppTheme();
 
   return (
     <Pressable
@@ -210,7 +210,7 @@ export function BookCard({ book, gridSize, showBadges, showDetails, onPress }: C
         {/* Compact thin progress line along bottom edge of cover */}
         {p > 0 && (
           <View style={styles.coverProgressBarBackground}>
-            <View style={[styles.coverProgressBarFill, { width: `${p}%` }]} />
+            <View style={[styles.coverProgressBarFill, { backgroundColor: accent.hex, width: `${p}%` }]} />
           </View>
         )}
       </View>
@@ -441,7 +441,6 @@ const styles = StyleSheet.create({
   },
   coverProgressBarFill: {
     height: '100%',
-    backgroundColor: 'rgb(var(--ac))',
   },
   cardDetails: {
     paddingHorizontal: 10,

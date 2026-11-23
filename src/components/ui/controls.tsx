@@ -29,7 +29,7 @@ export function Chip({
       } ${disabled ? 'opacity-40' : ''}`}
       style={selected ? { backgroundColor: accent.acb } : undefined}>
       <Text
-        className="font-ui"
+        className="font-ui text-tx"
         style={selected ? { color: contrastText(accent.acb) } : undefined}>
         {label}
       </Text>
@@ -106,7 +106,7 @@ export function SliderRow({
   step: number;
   onChange: (v: number) => void;
 }) {
-  const { accent } = useAppTheme();
+  const { accent, colors } = useAppTheme();
   return (
     <View className="mb-3">
       <View className="flex-row justify-between mb-1">
@@ -120,7 +120,7 @@ export function SliderRow({
         value={value}
         onValueChange={onChange}
         minimumTrackTintColor={accent.hex}
-        maximumTrackTintColor="rgb(var(--sf2))"
+        maximumTrackTintColor={colors.sf2}
         thumbTintColor={accent.hex}
       />
     </View>
@@ -139,6 +139,7 @@ export function ColorSwatches({
   options: string[];
   onChange: (hex: string) => void;
 }) {
+  const { accent, colors } = useAppTheme();
   return (
     <View className="mb-3">
       <Text className="font-ui text-mu text-[13px] mb-1.5">{label}</Text>
@@ -155,7 +156,7 @@ export function ColorSwatches({
               style={{
                 backgroundColor: hex,
                 borderWidth: selected ? 2 : 1,
-                borderColor: selected ? 'rgb(var(--ac))' : 'rgb(var(--ln))',
+                borderColor: selected ? accent.hex : colors.ln,
               }}>
               {selected && <View className="w-2.5 h-2.5 rounded-full bg-white/90" />}
             </Pressable>

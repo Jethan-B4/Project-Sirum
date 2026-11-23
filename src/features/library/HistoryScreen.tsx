@@ -1,8 +1,10 @@
 import { useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, Text } from 'react-native';
+import React, { useCallback, useDeferredValue, useMemo, useState } from 'react';
+import { ActivityIndicator, FlatList, Text, TextInput, View } from 'react-native';
 
 import { AppBar, Screen } from '@/components/chrome/app-bar';
+import { IconButton } from '@/components/ui/icon';
+import { useAppTheme } from '@/theme/ThemeProvider';
 import { BookRow } from '@/components/ui/book';
 import { SectionLabel, SegmentedControl } from '@/components/ui/controls';
 import { BottomSheet } from '@/components/ui/sheet';
@@ -16,6 +18,10 @@ export default function HistoryScreen() {
   const navMode = get(SettingKeys.deviceNavMode);
   const [books, setBooks] = useState<HistoryDocument[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const { colors } = useAppTheme();
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const term = useDeferredValue(query.trim().toLocaleLowerCase());
   const [showOptions, setShowOptions] = useState(false);
   const [order, setOrder] = useState<'newest' | 'oldest'>('newest');
   const [filter, setFilter] = useState<'all' | 'reading' | 'finished'>('all');
@@ -42,11 +48,12 @@ export default function HistoryScreen() {
 
   const visible = useMemo(() => {
     const rows = (books ?? []).filter((book) => {
+      if (term && ![book.title, book.author, book.chapter_title].some((value) => value?.toLocaleLowerCase().includes(term))) return false;
       const finished = (book.percent ?? 0) >= FINISHED_THRESHOLD;
       return filter === 'all' || (filter === 'finished' ? finished : !finished);
     });
     return order === 'oldest' ? rows.reverse() : rows;
-  }, [books, filter, order]);
+  }, [books, filter, order, term]);
 
   return (
     <Screen>
@@ -54,6 +61,7 @@ export default function HistoryScreen() {
         title="History"
         leading={navMode === 'side' ? 'menu' : 'none'}
         actions={[
+          { icon: 'search', label: 'Search reading history', onPress: () => { setSearchOpen(!searchOpen); setQuery(''); } },
           {
             icon: 'options-outline',
             label: 'Filter and sort history',
@@ -61,6 +69,14 @@ export default function HistoryScreen() {
           },
         ]}
       />
+      {searchOpen && (
+        <View className="mx-3 mb-2 px-3 flex-row items-center rounded-xl bg-surface">
+          <TextInput autoFocus accessibilityLabel="Search reading history" value={query} onChangeText={setQuery}
+            placeholder="Title, author or chapter" placeholderTextColor={colors.mu}
+            className="flex-1 py-2 font-ui text-tx" returnKeyType="search" />
+          <IconButton icon="close" label="Close history search" onPress={() => { setQuery(''); setSearchOpen(false); }} />
+        </View>
+      )}
       <FlatList
         data={visible}
         keyExtractor={(book) => book.id}
@@ -73,7 +89,7 @@ export default function HistoryScreen() {
               {failed
                 ? 'Could not load reading history.'
                 : books?.length
-                  ? 'No books match this filter.'
+                  ? term ? 'No matching books in history.' : 'No books match this filter.'
                   : 'Nothing read yet.'}
             </Text>
           )

@@ -1,6 +1,7 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
-import { FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useCallback, useMemo, useState } from 'react';
+import { FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppBar, Screen, useChrome } from '@/components/chrome/app-bar';
 import { BookCard, BookRow } from '@/components/ui/book';
@@ -9,7 +10,7 @@ import { Chip, SectionLabel, SegmentedControl } from '@/components/ui/controls';
 import { BottomSheet } from '@/components/ui/sheet';
 import { documents, type LibraryDocument } from '@/db/repositories/documents';
 import { useSettings } from '@/features/settings/SettingsProvider';
-import { useAppTheme } from '@/theme/ThemeProvider';
+import { type AppTheme, useAppTheme } from '@/theme/ThemeProvider';
 import { contrastText } from '@/lib/color';
 import {
   SettingKeys,
@@ -36,11 +37,16 @@ export default function LibraryScreen() {
   const params = useLocalSearchParams<{ tab?: string }>();
   const { get, set, has } = useSettings();
   const { toast, openDrawer } = useChrome();
-  const { isDark, accent } = useAppTheme();
+  const { isDark, accent, colors } = useAppTheme();
+  const styles = useLibraryStyles();
+  const { width, fontScale } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const contentWidth = width - insets.left - insets.right;
 
   const navMode = get(SettingKeys.deviceNavMode);
   const viewMode = get(SettingKeys.deviceViewMode);
-  const gridSize = get(SettingKeys.deviceGridSize);
+  const gridSize = Math.min(get(SettingKeys.deviceGridSize), Math.max(2, Math.floor(contentWidth / (78 * fontScale)))) as 2 | 3 | 4;
+  const cardWidth = Math.max(0, (contentWidth - 24 - 12 * (gridSize - 1)) / gridSize);
   const showBadges = get(SettingKeys.deviceShowBadges);
   const showDetails = get(SettingKeys.deviceShowDetails);
   const orderMode = get(SettingKeys.libraryOrderMode);
@@ -66,7 +72,7 @@ export default function LibraryScreen() {
     if (t === 'epub' || t === 'txt' || t === 'pdf' || t === 'all') setTab(t);
   }
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (active: () => boolean) => {
     const sheetFormats = filters.formats ?? [];
     let formats: DocumentFormat[] | undefined;
     if (tab !== 'all' && sheetFormats.length > 0) {
@@ -77,8 +83,8 @@ export default function LibraryScreen() {
       formats = sheetFormats;
     }
 
-    const [list, all] = await Promise.all([
-      documents.list({
+    const [list, counts] = await Promise.all([
+      formats?.length === 0 ? [] : documents.list({
         search: search.trim() || undefined,
         orderMode,
         sort,
@@ -86,22 +92,23 @@ export default function LibraryScreen() {
         formats,
         status: filters.status,
       }),
-      documents.list({ orderMode }),
+      documents.formatCounts(),
     ]);
+    if (!active()) return;
     setBooks(list);
-    const counts: Record<string, number> = { all: all.length };
-    for (const f of FORMATS) counts[f] = all.filter((b) => b.format === f).length;
     setFormatCounts(counts);
 
     // Ask-once library order prompt (plan 5.9): two or more books, no stored choice.
-    if (all.length >= 2 && !has(SettingKeys.libraryOrderMode) && !orderPromptDismissed) {
+    if (counts.all >= 2 && !has(SettingKeys.libraryOrderMode) && !orderPromptDismissed) {
       setOrderPrompt(true);
     }
   }, [tab, search, orderMode, sort, sortDirection, filters, has, orderPromptDismissed]);
 
   useFocusEffect(
     useCallback(() => {
-      load().catch((e) => console.error('Library load failed', e));
+      let focused = true;
+      load(() => focused).catch((e) => console.error('Library load failed', e));
+      return () => { focused = false; };
     }, [load])
   );
 
@@ -124,9 +131,8 @@ export default function LibraryScreen() {
       if (alwaysUseChoice) {
         await set(SettingKeys.libraryOrderMode, mode);
       }
-      load();
     },
-    [alwaysUseChoice, set, load]
+    [alwaysUseChoice, set]
   );
 
   const header = findOpen ? (
@@ -139,7 +145,7 @@ export default function LibraryScreen() {
           value={search}
           onChangeText={setSearch}
           placeholder="Search titles or authors…"
-          placeholderTextColor="rgb(var(--mu))"
+          placeholderTextColor={colors.mu}
           style={styles.searchInput}
         />
         {search.length > 0 && (
@@ -179,10 +185,12 @@ export default function LibraryScreen() {
             return (
               <Pressable
                 key={key}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: on }}
                 onPress={() => setTab(key)}
                 style={[styles.tabButton, on && styles.tabButtonActive]}>
                 <Text style={[styles.tabButtonText, on && styles.tabButtonTextActive]}>{label}</Text>
-                {count !== undefined && count > 0 && (
+                {count !== undefined && (
                   <View style={[styles.tabCountBadge, on && styles.tabCountBadgeActive]}>
                     <Text style={[styles.tabCountText, on && styles.tabCountTextActive]}>{count}</Text>
                   </View>
@@ -200,7 +208,7 @@ export default function LibraryScreen() {
       {tabs}
 
       {books.length === 0 ? (
-        <View style={styles.emptyContainer}>
+        <ScrollView contentContainerStyle={styles.emptyContainer}>
           <View style={styles.emptyIconCircle}>
             <Icon name="book" size={36} tone="accent" />
           </View>
@@ -225,7 +233,7 @@ export default function LibraryScreen() {
               </Pressable>
             </View>
           )}
-        </View>
+        </ScrollView>
       ) : viewMode === 'list' ? (
         <FlatList
           data={books}
@@ -242,7 +250,7 @@ export default function LibraryScreen() {
           columnWrapperStyle={gridSize > 1 ? { gap: 12 } : undefined}
           contentContainerStyle={styles.gridContent}
           renderItem={({ item }) => (
-            <View style={{ flex: 1 }}>
+            <View style={{ width: cardWidth }}>
               <BookCard
                 book={item}
                 gridSize={gridSize}
@@ -266,6 +274,7 @@ export default function LibraryScreen() {
 
       {/* Ask-once: library order (plan 5.9) */}
       <Modal
+        supportedOrientations={['portrait', 'landscape']}
         visible={orderPrompt && !orderPromptDismissed}
         transparent
         animationType="fade"
@@ -274,8 +283,8 @@ export default function LibraryScreen() {
           setOrderPromptDismissed(true);
         }}>
         <View style={styles.modalOverlay}>
-          <View
-            style={[
+          <ScrollView style={{ maxHeight: '95%', flexGrow: 0, width: '100%', maxWidth: 340 }}
+            contentContainerStyle={[
               styles.modalBox,
               {
                 backgroundColor: isDark ? '#1d1d22' : '#ffffff',
@@ -316,7 +325,7 @@ export default function LibraryScreen() {
                     backgroundColor: alwaysUseChoice ? accent.hex : 'transparent',
                   },
                 ]}>
-                {alwaysUseChoice && <Icon name="checkmark" size={13} tone="#ffffff" />}
+                {alwaysUseChoice && <Icon name="checkmark" size={13} tone={contrastText(accent.hex)} />}
               </View>
               <Text style={[styles.alwaysUseText, { color: isDark ? '#e4e4eb' : '#222226' }]}>
                 Always use this choice
@@ -347,7 +356,7 @@ export default function LibraryScreen() {
                 <Text style={[styles.modalPrimaryButtonText, { color: contrastText(accent.hex) }]}>Recent first</Text>
               </Pressable>
             </View>
-          </View>
+          </ScrollView>
         </View>
       </Modal>
     </Screen>
@@ -371,6 +380,7 @@ function FilterSheet({
   sort: 'title' | 'author' | 'added' | 'lastRead' | 'progress';
   sortDirection: 'asc' | 'desc';
 }) {
+  const styles = useLibraryStyles();
   const { get, set } = useSettings();
   const viewMode = get(SettingKeys.deviceViewMode);
   const gridSize = get(SettingKeys.deviceGridSize);
@@ -470,7 +480,12 @@ function FilterSheet({
   );
 }
 
-const styles = StyleSheet.create({
+function useLibraryStyles() {
+  const theme = useAppTheme();
+  return useMemo(() => createStyles(theme), [theme]);
+}
+
+const createStyles = ({ colors, accent }: AppTheme) => StyleSheet.create({
   searchHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -483,7 +498,7 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgb(var(--surface-2))',
+    backgroundColor: colors.sf2,
     borderRadius: 24,
     paddingHorizontal: 14,
     paddingVertical: 8,
@@ -492,13 +507,13 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontSize: 15,
-    color: 'rgb(var(--tx))',
+    color: colors.tx,
     padding: 0,
   },
   tabBarWrapper: {
     borderBottomWidth: 1,
-    borderBottomColor: 'rgb(var(--ln))',
-    backgroundColor: 'rgb(var(--bg))',
+    borderBottomColor: colors.ln,
+    backgroundColor: colors.bg,
   },
   tabBarContent: {
     paddingHorizontal: 12,
@@ -515,33 +530,33 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   tabButtonActive: {
-    backgroundColor: 'rgb(var(--surface-2))',
+    backgroundColor: colors.sf2,
   },
   tabButtonText: {
     fontSize: 14,
     fontWeight: '500',
-    color: 'rgb(var(--mu))',
+    color: colors.mu,
   },
   tabButtonTextActive: {
-    color: 'rgb(var(--tx))',
+    color: colors.tx,
     fontWeight: '600',
   },
   tabCountBadge: {
-    backgroundColor: 'rgb(var(--surface))',
+    backgroundColor: colors.sf,
     borderRadius: 10,
     paddingHorizontal: 6,
     paddingVertical: 1,
   },
   tabCountBadgeActive: {
-    backgroundColor: 'rgb(var(--ac))',
+    backgroundColor: accent.hex,
   },
   tabCountText: {
     fontSize: 11,
-    color: 'rgb(var(--mu))',
+    color: colors.mu,
     fontWeight: '600',
   },
   tabCountTextActive: {
-    color: '#ffffff',
+    color: contrastText(accent.hex),
   },
   gridContent: {
     padding: 12,
@@ -553,7 +568,7 @@ const styles = StyleSheet.create({
     paddingBottom: 32,
   },
   emptyContainer: {
-    flex: 1,
+    flexGrow: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 32,
@@ -563,7 +578,7 @@ const styles = StyleSheet.create({
     width: 72,
     height: 72,
     borderRadius: 36,
-    backgroundColor: 'rgb(var(--surface-2))',
+    backgroundColor: colors.sf2,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 16,
@@ -571,13 +586,13 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: 'rgb(var(--tx))',
+    color: colors.tx,
     textAlign: 'center',
     marginBottom: 8,
   },
   emptySubtitle: {
     fontSize: 14,
-    color: 'rgb(var(--mu))',
+    color: colors.mu,
     textAlign: 'center',
     lineHeight: 20,
     maxWidth: 280,
@@ -591,11 +606,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgb(var(--ac))',
+    backgroundColor: accent.hex,
     borderRadius: 24,
     paddingHorizontal: 20,
     paddingVertical: 12,
-    shadowColor: 'rgb(var(--ac))',
+    shadowColor: accent.hex,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.3,
     shadowRadius: 6,

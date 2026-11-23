@@ -11,6 +11,7 @@
     "@supabase/supabase-js": "^2.119.0",
     "expo": "~58.0.26",
     "expo-brightness": "~58.0.3",
+    "expo-build-properties": "~58.0.12",
     "expo-constants": "~58.0.16",
     "expo-crypto": "~58.0.8",
     "expo-device": "~58.0.5",
@@ -61,7 +62,9 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "check:package-size": "node scripts/check-package-size.mjs",
+    "eas-build-on-success": "node scripts/check-package-size.mjs --eas"
   },
   "private": true
 }

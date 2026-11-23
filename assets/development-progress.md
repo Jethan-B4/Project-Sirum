@@ -2,7 +2,7 @@
 
 Tracks implementation status against `offline-reader-dev-plan.md`. Update this file as milestones complete.
 
-**Last updated:** 2026-11-22
+**Last updated:** 2026-11-23
 
 ---
 
@@ -17,12 +17,25 @@ Tracks implementation status against `offline-reader-dev-plan.md`. Update this f
 | Phase 4: Supabase backend | 🟡 Partial | Migrations written (`supabase/migrations/`); not verified against a live project |
 | Phase 5: Google auth | ⬜ Not started | `expo-secure-store`, supabase-js installed; no native sign-in yet |
 | Phase 6: Sync engine | ⬜ Not started | Schema supports it; no push/pull code |
-| Phase 7: Testing & hardening | ⬜ Not started | — |
-| Phase 8: Polish & release | ⬜ Not started | — |
+| Phase 7: Testing & hardening | Partial | Reader, link extraction, import recovery and large-book search regressions covered. Physical-device profiling remains open. |
+| Phase 8: Polish & release | Partial | Adaptive Library and reader controls implemented. Production package size check in place. |
 
 Legend: ✅ done · 🟢 advanced / nearly done · 🟡 partial · ⬜ not started
 
 ---
+
+## Adaptive layouts, History search and reader links (2026-11-23)
+
+- Library category labels and counts, including zero, use native theme colors. Selected controls choose a foreground based on the fill color. Rotating the device updates the grid and reader layout. Display settings and the Library order prompt scroll in short viewports.
+- History searches titles, authors and saved chapter names. Results retain the History screen's selected reading-status filter and last-read order. Closing search restores the list.
+- EPUB import saves each hyperlink's visible label range and each named anchor alongside the normalized chapter. Previously imported books rebuild this data from their local original when needed. Tapping a blue, underlined link displays the destination and offers a choice to proceed or cancel. Internal jumps resolve the chapter and anchor. An off-spine footnote opens separately so closing it returns to the original reading position. TXT web addresses use the same confirmation.
+- The reader looks up links only within the visible text chunks during rendering. EPUB chapter extraction periodically yields to the UI during long imports. Library format totals use one grouped SQLite query, and the icon import bundles only the Ionicons font from the vector icon set.
+- The release plan caps each distributed package at 100,000,000 bytes. The package checker accepted the exact limit and rejected an empty file and a file one byte above the limit. Production EAS builds invoke it automatically.
+- The local Android release build produced a **48,917,421-byte universal APK** and a **64,498,036-byte AAB**, both within the limit. Enabling native-library compression reduced the APK from 110.54 MB and retained all four Android architectures. The iOS Metro export passed. Signed IPA size remains unmeasured on this Windows host.
+- TypeScript, Expo lint, both mobile exports and eight reader regression tests passed. A SQLite integration exercise with simulated native storage verified simultaneous reads during an older book's link-cache rebuild. A 600-chapter EPUB fixture verified the import, a link from the first chapter to the last and extraction of a linked off-spine footnote. Search regression coverage also reaches chapter 600.
+- On an Android API 37 emulator, all four category labels and counts passed a screenshot contrast check in light portrait and dark landscape. The release app imported the 600-chapter EPUB from the system picker, showed the external address before cancellation, opened and returned from the footnote, and jumped to chapter 600 after confirmation. Searching History by author returned the book and its saved chapter. An unmatched query showed the empty state and closing search restored the row.
+- Device testing exposed a grid row with one book stretching to full width. Cards now retain the selected column width on incomplete rows. During reading, the footer updates when its displayed percentages change. Bookmarks, navigation and saved progress retain the exact text offset.
+- On the final APK the single-card row occupied 329 of 720 screen pixels. Six scrolling gestures in chapter 600 produced 245 frames, with a 10 ms median and a 20 ms 95th percentile. Android classified 31 frames (12.65%) as janky. The emulator restored the saved chapter and accepted a bookmark after scrolling. Frame pacing on a lower-end physical phone remains open.
 
 ## Library, reading history and scan results (2026-11-22)
 
@@ -200,8 +213,12 @@ The screens, layout, and interactions from `sirum-ui-prototype.html` are impleme
 - `reader/ReaderScreen.tsx` — per-chapter reader: progress footer + scrubber, overflow menu (bookmark/contents/settings), position restore, debounced progress writes, keep-awake, ask-once percentage prompt.
 - `reader/ContentsPanel.tsx` — right-side panel: Contents / Annotations / Bookmarks tabs.
 - `reader/DisplayPopup.tsx` — Aa popup: flow, brightness, theme, size %, align, margin %, scope switch.
-- `reader/SearchOverlay.tsx` — in-book search with history and snippet results.
+- `reader/SearchOverlay.tsx` — in-book search with history and snippet results; uses `searchBook` for cancellable, incremental whole-book scans.
+- `reader/ChunkedChapter.tsx` — windowed rendering: mounts ≤7 text chunks around the visible passage, maps scroll position to character offsets via native line layouts, restores position without a jump.
+- `reader/resume.ts` — `resumePosition()`: resolves saved `chapter_index`/`char_offset` (incl. shared chapter boundaries) to a chapter + intra-chapter offset.
 - `reader/ReadingStyleEditor.tsx` — shared style editor (settings page) + live preview; percentage size/margin, flow, align.
+- `lib/color.ts` — WCAG luminance + `contrastText()` for adaptive black/white foregrounds on accent fills and reader backgrounds.
+- `scripts/reader-regressions.test.mjs` — Node test suite (`node --test`) covering resume-position edge cases, chunk offset mapping and incremental search.
 
 ### Theming (`src/theme/`)
 
@@ -248,7 +265,7 @@ The screens, layout, and interactions from `sirum-ui-prototype.html` are impleme
 | EPUB import & reading | ✅ | Pure-JS extraction (`fflate`, `fast-xml-parser`, `htmlparser2`) |
 | Settings hub + 6 sub-pages | ✅ | All prototype categories |
 | Appearance theme/accent/app font | ✅ | Runtime CSS vars, live switch |
-| Reader screen | ✅ | Per-chapter reading, top bar, bottom scrubber, overflow menu |
+| Reader screen | ✅ | Per-chapter reading, windowed chunk rendering, top bar, bottom scrubber, overflow menu |
 | Reader contents panel | ✅ | Contents / Annotations / Bookmarks tabs, tap-to-jump |
 | Reader display popup (Aa) | ✅ | Flow, brightness, theme, size %, align, margin %, scope switch |
 | In-book search | ✅ | History (last 10), live snippet results, jump-to-match |
@@ -258,7 +275,7 @@ The screens, layout, and interactions from `sirum-ui-prototype.html` are impleme
 | Reader "Aa" display sheet | ✅ | Scope all/book, presets, sliders, swatches, reset (settings page editor) |
 | Per-book style overrides | ✅ | `reader.book.<id>` synced keys |
 | Progress display book/chapter | ✅ | Footer label + ask-once prompt |
-| Progress save/restore | ✅ | Debounced writes, restore on open, no write-on-open |
+| Progress save/restore | ✅ | Debounced writes, chapter-aware resume, flush on background/exit, no write-on-open |
 | Toasts | ✅ | Global via ChromeProvider |
 | Ask-once prompts (order, percentage) | ✅ | Added per plan (not in prototype) |
 

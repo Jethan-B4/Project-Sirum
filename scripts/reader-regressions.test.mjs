@@ -107,3 +107,41 @@ test('an unreadable chapter does not hide matches later in the book', async () =
   assert.equal(skipped, 1);
   assert.equal(result[0].chapterOffset, 3);
 });
+
+test('EPUB link ranges preserve repeated labels and exact normalized UTF-16 offsets', async () => {
+  const { extractChapterHtml } = await import('../src/formats/epub/chapterHtml.ts');
+  const html = '<p>  \u{1f4da}  <a href="../b.xhtml#foot">see <b>this</b></a> see this</p>' +
+    '<a name="here"></a><p id="end">e\u0301 <a href="https://example.org">see this</a></p>';
+  const { text, navigation } = extractChapterHtml(html);
+  assert.equal(text, '\u{1f4da} see this see this\n\u00e9 see this');
+  assert.deepEqual(navigation.links.map(({start, end}) => text.slice(start, end)), ['see this', 'see this']);
+  assert.equal(navigation.links[1].start, text.lastIndexOf('see this'));
+  assert.deepEqual(navigation.anchors, [['here', text.indexOf('\u00e9')], ['end', text.indexOf('\u00e9')]]);
+});
+
+test('reader resolves book fragments and keeps external links separate', async () => {
+  const { resolveBookLink, plainLinks, linksInRange } = await import('../src/text/links.ts');
+  const sources = ['text/intro.xhtml', 'notes/end%20notes.xhtml'];
+  const resolve = (href) => resolveBookLink(href, sources[0], sources, 'OPS');
+  assert.deepEqual(resolve('../notes/end%20notes.xhtml#n1'), {kind: 'internal', index: 1, fragment: 'n1', address: 'OPS/notes/end notes.xhtml#n1'});
+  assert.equal(resolve('#local').index, 0);
+  assert.equal(resolve('https://example.org/test').kind, 'external');
+  assert.equal(resolve('notes.xhtml').kind, 'supplement');
+  assert.equal(resolve('javascript:alert(1)').kind, 'missing');
+  const [link] = plainLinks('A https://example.org/test. End');
+  assert.equal(link.href, 'https://example.org/test');
+  assert.deepEqual(linksInRange([link], link.start+2, link.end), [link]);
+  assert.deepEqual(linksInRange([link], link.end, link.end+4), []);
+});
+
+test('accent foregrounds stay readable for light, dark, and middle-luminance fills', async () => {
+  const { contrastText, linkColor, relativeLuminance } = await import('../src/lib/color.ts');
+  for (const bg of ['#ffffff','#000000','#777777','#52c98b','#5b46c9','#bfeacf','#1b66b8']) {
+    const l = [relativeLuminance(bg), relativeLuminance(contrastText(bg))].sort((a,b)=>b-a);
+    assert.ok((l[0]+0.05)/(l[1]+0.05) >= 4.5);
+  }
+  for (const bg of ['#ffffff', '#000000', '#2b2b2e', '#f1e4c3', '#777777']) {
+    const [low, high] = [bg, linkColor(bg)].map(relativeLuminance).sort((a, b) => a - b);
+    assert.ok((high + 0.05) / (low + 0.05) >= 4.5);
+  }
+});

@@ -130,6 +130,19 @@ export const documents = {
     );
   },
 
+  async formatCounts() {
+    const db = await getDb();
+    const rows = await db.getAllAsync<{ format: DocumentFormat; total: number }>(
+      'SELECT format, COUNT(*) AS total FROM documents WHERE deleted_at IS NULL GROUP BY format'
+    );
+    const counts = { all: 0, epub: 0, txt: 0, pdf: 0 };
+    for (const row of rows) {
+      counts[row.format] = row.total;
+      counts.all += row.total;
+    }
+    return counts;
+  },
+
   async listHistory(): Promise<HistoryDocument[]> {
     const db = await getDb();
     return db.getAllAsync<HistoryDocument>(

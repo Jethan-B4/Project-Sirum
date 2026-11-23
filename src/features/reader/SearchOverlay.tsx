@@ -74,7 +74,8 @@ export function SearchOverlay({
 
   if (!visible) return null;
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+    <Modal
+      supportedOrientations={['portrait', 'landscape']} visible={visible} animationType="slide" onRequestClose={onClose}>
       <View className="flex-1 bg-surface" style={{ paddingTop: insets.top }}>
         {/* Search bar */}
         <View className="flex-row items-center gap-1 px-2 pt-2 pb-2">

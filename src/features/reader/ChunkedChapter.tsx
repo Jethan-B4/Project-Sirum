@@ -1,14 +1,37 @@
 import React, { useRef, useState } from 'react';
 import { ScrollView, Text, type TextStyle, type NativeScrollEvent } from 'react-native';
+import { linksInRange } from '@/text/links';
+import type { BookLink } from '@/formats/types';
 import { type Chunk, findChunkForOffset } from '@/text/chunk';
 
 const WINDOW_SIZE = 7;
 type Line = { offset: number; y: number };
 type Frame = { top?: number; lines?: Line[] };
 
+const LinkedText = React.memo(function LinkedText({ chunk, links, color, onLink }: {
+  chunk: Chunk; links: BookLink[]; color: string; onLink(href: string): void;
+}) {
+  const text = chunk.text.replace(/\n$/, '');
+  const end = chunk.startOffset + text.length;
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  for (const link of linksInRange(links, chunk.startOffset, end)) {
+    const from = Math.max(0, link.start - chunk.startOffset);
+    const to = Math.min(end, link.end) - chunk.startOffset;
+    if (cursor < from) parts.push(text.slice(cursor, from));
+    parts.push(<Text key={link.start} accessibilityRole="link" onPress={() => onLink(link.href)}
+      style={{ color, textDecorationLine: 'underline' }}>{text.slice(from, to)}</Text>);
+    cursor = to;
+  }
+  return <>{parts}{text.slice(cursor)}</>;
+});
+
 /** Keep a few native text blocks around the visible passage, in source order. */
 export function ChunkedChapter({
   chunks,
+  links,
+  linkColor,
+  onLink,
   length,
   initialOffset: requestedOffset,
   onMove,
@@ -18,8 +41,11 @@ export function ChunkedChapter({
   footer,
 }: {
   chunks: Chunk[];
+  links: BookLink[];
+  linkColor: string;
+  onLink(href: string): void;
   length: number;
-  initialOffset: number;
+  initialOffset: number | (() => number);
   onMove(offset: number): void;
   margin: number;
   textStyle: TextStyle;
@@ -135,7 +161,7 @@ export function ChunkedChapter({
             updateFrame(chunk.chunkIndex, { lines });
           }}
         >
-          {chunk.text.replace(/\n$/, '')}
+          <LinkedText chunk={chunk} links={links} color={linkColor} onLink={onLink} />
         </Text>
       ))}
       {end === chunks.length && footer}

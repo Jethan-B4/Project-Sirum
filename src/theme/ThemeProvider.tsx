@@ -10,6 +10,8 @@ import {
   resolveAccent,
   resolveThemeName,
   themeVars,
+  ThemePalettes,
+  type ThemePalette,
   type ResolvedAccent,
   type ResolvedThemeName,
 } from './palette';
@@ -17,6 +19,7 @@ import {
 export interface AppTheme {
   /** 'system' resolved against the OS, then mapped to a concrete palette. */
   name: ResolvedThemeName;
+  colors: ThemePalette;
   isDark: boolean;
   isLight: boolean;
   accent: ResolvedAccent;
@@ -36,8 +39,12 @@ export function AppThemeProvider({ children }: { children: React.ReactNode }) {
   const theme = useMemo<AppTheme>(() => {
     const name = resolveThemeName(themeChoice, scheme);
     const isDark = name === 'dark';
+    const palette = ThemePalettes[name];
+    const nativeColor = (rgb: string) => 'rgb(' + rgb.replace(/ /g, ',') + ')';
     return {
       name,
+      colors: { bg: nativeColor(palette.bg), sf: nativeColor(palette.sf), sf2: nativeColor(palette.sf2),
+        tx: nativeColor(palette.tx), mu: nativeColor(palette.mu), ln: nativeColor(palette.ln) },
       isDark,
       isLight: !isDark,
       accent: resolveAccent(accentChoice, !isDark),
