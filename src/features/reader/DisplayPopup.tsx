@@ -6,8 +6,9 @@ import { IconButton } from '@/components/ui/icon';
 import { Chip, ColorSwatches, SectionLabel, SegmentedControl, SliderRow } from '@/components/ui/controls';
 import { useAppTheme } from '@/theme/ThemeProvider';
 import { contrastText } from '@/lib/color';
-import type { ReadingStyle } from '@/lib/settingsKeys';
-import { BG_SWATCHES, LineHeightControl, TX_SWATCHES } from './ReadingStyleEditor';
+import { SettingKeys, type ReadingStyle } from '@/lib/settingsKeys';
+import { useSettings } from '@/features/settings/SettingsProvider';
+import { BG_SWATCHES, LineHeightControl, ParagraphIndentControl, TX_SWATCHES } from './ReadingStyleEditor';
 
 /** Prototype theme swatches: [background, text] pairs. */
 const THEME_SWATCHES: readonly (readonly [string, string, string])[] = [
@@ -49,6 +50,7 @@ export function DisplayPopup({
 }) {
   const [tab, setTab] = useState<'text' | 'colors' | 'layout'>('text');
   const { accent, colors } = useAppTheme();
+  const { get, set } = useSettings();
 
   return (
     <ReaderOptionsPopup visible={visible} onClose={onClose} toolbarHeight={toolbarHeight} wide>
@@ -67,6 +69,7 @@ export function DisplayPopup({
           <SliderRow label="Text size" value={style.size} display={style.size + '%'} min={60} max={200}
             step={10} onChange={(size) => onPatch({ size })} />
           <LineHeightControl value={style.lh} onChange={onPatch} />
+          <ParagraphIndentControl style={style} onChange={onPatch} />
           <SectionLabel>Alignment</SectionLabel>
           <SegmentedControl options={[['left', 'Left'], ['justify', 'Justify']]} value={style.align}
             onChange={(align) => onPatch({ align })} />
@@ -77,6 +80,9 @@ export function DisplayPopup({
           <SectionLabel>Reading flow</SectionLabel>
           <SegmentedControl options={[['auto', 'Auto'], ['paged', 'Paged'], ['scrolled', 'Scrolled']]}
             value={style.flow} onChange={(flow) => onPatch({ flow })} />
+          <SectionLabel>Progress bar (all books)</SectionLabel>
+          <SegmentedControl options={[['book', 'Whole book'], ['chapter', 'Current chapter']]}
+            value={get(SettingKeys.readerPercentageMode)} onChange={value => set(SettingKeys.readerPercentageMode, value)} />
         </>}
         {tab === 'colors' && <>
           <SectionLabel>Theme</SectionLabel>

@@ -24,6 +24,18 @@ Legend: ✅ done · 🟢 advanced / nearly done · 🟡 partial · ⬜ not start
 
 ---
 
+## Reader gestures, settings navigation and paragraph indents (2026-11-24)
+
+- Horizontal swipes now open the previous or next chapter at its beginning in all three flows. Paged edge taps still advance within the current chapter. Vertical flings have a continuous scroll extent through the chapter footer.
+- Aa → Layout and Settings → Reader share the progress-bar preference. The thumb, percentage and seek destination follow the selected book or chapter. The chapter-end button sits at the trailing text margin with a contrasting label, arrow and outline.
+- The Android screenshot in `local/Screenshot_2026-11-24-17-41-03-234_host.exp.exponent.jpg` and the local *Catching Fire* EPUB show a two-line part title authored as centered paragraphs with enlarged spans. Presentation cache v5 preserves that alignment on existing imports and the renderer reserves line height for the larger type.
+
+- Horizontal swipes preview the destination at the finger position. Slide reveals the adjacent passage side by side, and Fade blends the two. Reversing a short drag cancels the turn. Reading progress changes on commit. Edge taps can be turned off independently under Settings → Reader.
+- Aa, More and Contents leave the exposed book interactive. Opening Settings from the book hides the app's bottom navigation on the settings hub and its category screens. Back returns to the open book.
+- Aa → Text and Settings → Reader offer first-line indents from 1 to 4 em, with a 2 em initial length and indentation off by default. The display preference supports book-specific overrides. EPUB headings, list markers, hard-cut paragraph continuations and stored text offsets retain their existing behavior.
+- On the Android API 37 emulator, the chapter slider reached 51% within Part I of *Catching Fire*. After switching to Whole book in Aa → Layout, the same slider position reached 51% of the book in Chapter 14. In Paged flow, a left swipe opened Chapter 15 at its opening illustration and a right swipe returned to the opening of Chapter 14. Both lines of the Part I title were centered within one pixel of the 1080-pixel screen midpoint.
+- Earlier emulator checks covered the held chapter preview, cancellation, swiping outside an open Aa panel, reader settings navigation, disabling edge taps and applying a four-em first-line indent.
+
 ## Reader layout and transitions (2026-11-24)
 
 - Covers occupy the reader viewport in portrait and landscape. The same layout handles a separate library cover and an image-only first spine item. The reader displays EPUB headings in the passage and the chapter's contents label in the compact progress bar.

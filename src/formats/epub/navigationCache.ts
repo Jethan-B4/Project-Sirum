@@ -103,7 +103,8 @@ export async function chapterNavigation(uri: string, dir: string, rows: ChapterR
       return await read();
     } catch {
       const stem = dir + '/' + chapterFileStem(index);
-      return read(stem + '.presentation-v3.json')
+      return read(stem + '.presentation-v4.json')
+        .catch(() => read(stem + '.presentation-v3.json'))
         .catch(() => read(stem + '.presentation-v2.json'))
         .catch(() => read(stem + '.presentation.json'))
         .catch(() => read(stem + '.links.json'));

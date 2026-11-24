@@ -12,6 +12,7 @@ export const SettingKeys = {
   readerPercentageMode: 'reader.percentageMode',
   readerStyle: 'reader.style',
   readerNextButton: 'reader.nextChapterButton',
+  readerEdgeTaps: 'reader.edgeTaps',
   readerTransition: 'reader.transition',
   readerTransitionSpeed: 'reader.transitionSpeed',
 
@@ -103,10 +104,13 @@ export interface ReadingStyle {
   tx: string; // hex color
   flow: ReadingFlow;
   align: TextAlign;
+  indentParagraphs: boolean;
+  indentLength: number; // em spaces
 }
 
 export interface SettingValues {
   [SettingKeys.readerNextButton]: boolean;
+  [SettingKeys.readerEdgeTaps]: boolean;
   [SettingKeys.readerTransition]: 'fade' | 'slide' | 'none';
   [SettingKeys.readerTransitionSpeed]: 'fast' | 'normal' | 'slow';
   [SettingKeys.readerPercentageMode]: PercentageMode;
@@ -142,10 +146,13 @@ export const DEFAULT_READING_STYLE: ReadingStyle = {
   tx: '#e6e6e6',
   flow: 'scrolled',
   align: 'justify',
+  indentParagraphs: false,
+  indentLength: 2,
 };
 
 export const SettingDefaults: SettingValues = {
   [SettingKeys.readerNextButton]: true,
+  [SettingKeys.readerEdgeTaps]: true,
   [SettingKeys.readerTransition]: 'fade',
   [SettingKeys.readerTransitionSpeed]: 'normal',
   [SettingKeys.readerPercentageMode]: 'book',
@@ -225,6 +232,9 @@ export function normalizeStylePatch(
 ): Partial<ReadingStyle> | undefined {
   if (!patch) return patch;
   const out = { ...patch };
+  if (out.indentLength !== undefined) {
+    out.indentLength = Number.isFinite(out.indentLength) ? Math.max(1, Math.min(4, Math.round(out.indentLength))) : 2;
+  }
   if (typeof out.size === 'number' && out.size > 0 && out.size <= 30) {
     out.size = Math.round((out.size / 18) * 100);
   }

@@ -18,6 +18,9 @@ export default function ReaderSettings() {
   return (
     <SettingsPage title="Reader">
       <Section title="Chapter navigation">
+        <SectionLabel>Turn with edge taps</SectionLabel>
+        <SegmentedControl options={[[true, 'On'], [false, 'Off']]} value={get(SettingKeys.readerEdgeTaps)}
+          onChange={(value) => set(SettingKeys.readerEdgeTaps, value)} />
         <SectionLabel>Next chapter button</SectionLabel>
         <SegmentedControl options={[[true, 'Show'], [false, 'Hide']]} value={get(SettingKeys.readerNextButton)}
           onChange={(value) => set(SettingKeys.readerNextButton, value)} />
@@ -31,7 +34,7 @@ export default function ReaderSettings() {
       </Section>
       <Section
         title="Progress display"
-        description="Show progress for the whole book or the current chapter.">
+        description="Choose whether the reader’s progress bar shows and seeks through the whole book or the current chapter.">
         <SegmentedControl
           options={[
             ['book', 'Whole book'],

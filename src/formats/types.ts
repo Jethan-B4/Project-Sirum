@@ -4,13 +4,13 @@ export interface BookLink {
   href: string;
 }
 
-export const PRESENTATION_VERSION = 4 as const;
+export const PRESENTATION_VERSION = 5 as const;
 
 export interface ChapterNavigation {
   packageDir?: string;
   links: BookLink[];
   anchors: [string, number][];
-  presentationVersion?: 1 | 2 | 3 | typeof PRESENTATION_VERSION;
+  presentationVersion?: 1 | 2 | 3 | 4 | typeof PRESENTATION_VERSION;
   paragraphs?: ChapterParagraph[];
   styles?: { start: number; end: number; style: PublisherStyle }[];
   images?: ChapterImage[];

@@ -35,6 +35,18 @@ const WEIGHTS: readonly (readonly [400 | 500 | 700, string])[] = [
 /** Base reading font size in pt; `style.size` is a percentage of this. */
 export const BASE_FONT_SIZE = 17;
 
+export function ParagraphIndentControl({ style, onChange }: {
+  style: ReadingStyle; onChange(patch: Partial<ReadingStyle>): void;
+}) {
+  return <>
+    <SectionLabel>First-line paragraph indent</SectionLabel>
+    <SegmentedControl options={[[false, 'Off'], [true, 'On']]} value={style.indentParagraphs}
+      onChange={indentParagraphs => onChange({ indentParagraphs })} />
+    {style.indentParagraphs && <SliderRow label="Indent length" value={style.indentLength} display={style.indentLength + ' em'}
+      min={1} max={4} step={1} onChange={indentLength => onChange({ indentLength })} />}
+  </>;
+}
+
 export function LineHeightControl({ value, onChange }: {
   value: number;
   onChange(patch: Pick<ReadingStyle, 'lh'>): void;
@@ -98,6 +110,7 @@ export function ReadingStyleEditor({
         onChange={(size) => onChange({ size })}
       />
       <LineHeightControl value={value.lh} onChange={onChange} />
+      <ParagraphIndentControl style={value} onChange={onChange} />
       <SliderRow
         label="Margin"
         value={value.mar}
@@ -144,6 +157,7 @@ export function ReadingStyleEditor({
 
 /** Live preview block (prototype `.rprev`). */
 export function StylePreview({ style }: { style: ReadingStyle }) {
+  const indent = style.indentParagraphs ? '\u2003'.repeat(style.indentLength) : '';
   return (
     <View
       className="rounded-xl my-3 p-4"
@@ -159,8 +173,8 @@ export function StylePreview({ style }: { style: ReadingStyle }) {
           ),
           textAlign: style.align === 'justify' ? 'justify' : 'left',
         }}>
-        The lamp on the quay had been lit for an hour before anyone noticed the boat was
-        gone.{'\n\n'}“It didn’t drift,” she said. “Somebody took it, and they wanted us to
+        {indent}The lamp on the quay had been lit for an hour before anyone noticed the boat was
+        gone.{'\n\n'}{indent}“It didn’t drift,” she said. “Somebody took it, and they wanted us to
         see the lamp.”
       </Text>
     </View>

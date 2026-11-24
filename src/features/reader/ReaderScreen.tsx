@@ -1,5 +1,6 @@
 import { ReaderMotion, ReaderOverlay } from './ReaderOverlay';
-import { ReaderCover } from './ReaderCover';
+import { BookPassage, type LoadedChapter } from './BookPassage';
+import type { Direction } from './useSwipeTurn';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, Alert, Animated, Easing, Linking, AppState, Pressable, Text, View, useWindowDimensions } from 'react-native';
@@ -26,13 +27,12 @@ import {
   type ReadingStyle,
 } from '@/lib/settingsKeys';
 import { chapterNavigation, readSupplement } from '@/formats/epub/navigationCache';
-import type { ChapterNavigation } from '@/formats/types';
-import { plainLinks, resolveBookLink, linksInRange } from '@/text/links';
+import { resolveBookLink } from '@/text/links';
 import { contrastText, linkColor } from '@/lib/color';
 import { chunkChapter } from '@/text/chunk';
 import { useAppTheme } from '@/theme/ThemeProvider';
 import { ThemePalettes } from '@/theme/palette';
-import { bookPercent } from '@/text/position';
+import { bookPercent, bookSliderDestination, displayPercent } from '@/text/position';
 import { ChunkedChapter } from './ChunkedChapter';
 import type { ProgressInput } from '@/db/repositories/progress';
 import { ContentsPanel } from './ContentsPanel';
@@ -102,6 +102,7 @@ function BookReader({ id }: { id: string }) {
   }, []);
   const [chIdx, setChIdx] = useState(0);
   const [frac, setFrac] = useState(0);
+  const [scrub, setScrub] = useState<number | null>(null);
   const [bms, setBms] = useState<BookmarkRow[]>([]);
   const [hls, setHls] = useState<HighlightRow[]>([]);
   const [pmDismissed, setPmDismissed] = useState(false);
@@ -127,18 +128,11 @@ function BookReader({ id }: { id: string }) {
   const hasOverride = !!bookOverride && Object.keys(bookOverride).length > 0;
   const style: ReadingStyle = { ...defaultStyle, ...(bookOverride ?? {}) };
 
-  const [loaded, setLoaded] = useState<{ index: number; text: string; nav: ChapterNavigation | null } | null>(null);
+  const [loaded, setLoaded] = useState<LoadedChapter | null>(null);
   const [navigationRevision, setNavigationRevision] = useState(0);
   const [ready, setReady] = useState(false);
   const activeText = loaded?.index === chIdx ? loaded.text : null;
   const nav = loaded?.index === chIdx ? loaded.nav : null;
-  const chunks = useMemo(() => chunkChapter(chIdx, activeText ?? '', 0, nav?.images, nav?.paragraphs), [chIdx, activeText, nav]);
-  const plain = useMemo(() => plainLinks(activeText ?? ''), [activeText]);
-  const links = useMemo(() => {
-    if (!nav?.links.length) return plain;
-    const extra = plain.filter((link) => !linksInRange(nav.links, link.start, link.end).length);
-    return extra.length ? [...nav.links, ...extra].sort((a, b) => a.start - b.start) : nav.links;
-  }, [nav, plain]);
   const sources = useMemo(() => chs.map((row) => row.source_href), [chs]);
   const ch = chs[chIdx];
   const charCount = doc?.char_count ?? 0;
@@ -219,9 +213,9 @@ function BookReader({ id }: { id: string }) {
     const global = row.start_offset + offset;
     const fraction = row.char_count ? offset / row.char_count : 0;
     setFrac((previous) => {
-      if (index !== chIdx || Math.round(previous * 100) !== Math.round(fraction * 100)) return fraction;
+      if (index !== chIdx || fraction === 0 || displayPercent(previous) !== displayPercent(fraction)) return fraction;
       const previousGlobal = row.start_offset + previous * row.char_count;
-      return Math.round(bookPercent(previousGlobal, charCount) * 100) === Math.round(bookPercent(global, charCount) * 100)
+      return displayPercent(bookPercent(previousGlobal, charCount)) === displayPercent(bookPercent(global, charCount))
         ? previous : fraction;
     });
     if (global === lastOffset.current && index === chIdx) return;
@@ -238,15 +232,19 @@ function BookReader({ id }: { id: string }) {
   const request = useRef(0);
   const [direction, setDirection] = useState(1);
   useEffect(() => () => { request.current++; }, []);
-  const jumpToChapter = useCallback(async (index: number, fraction = 0) => {
+  const skipEntrance = useRef(false);
+  const jumpToChapter = useCallback(async (index: number, fraction = 0, prepared?: LoadedChapter) => {
     const row = chs[index];
     if (!row) return;
+    setScrub(null);
     const ticket = ++request.current;
     const offset = Math.round(row.char_count * Math.max(0, Math.min(1, fraction)));
     try {
-      const page = loaded?.index === index ? loaded : await loadChapter(index);
+      const page = prepared ?? (loaded?.index === index ? loaded : await loadChapter(index));
       if (request.current !== ticket) return;
       setDirection(row.start_offset + offset < lastOffset.current || index < chIdx ? -1 : 1);
+      skipEntrance.current = !!prepared;
+      setOverlay('none');
       setLoaded(page);
     } catch {
       if (request.current === ticket) toast('This chapter could not be opened');
@@ -266,7 +264,8 @@ function BookReader({ id }: { id: string }) {
   } | null>(null);
   const supplementChunks = useMemo(() => chunkChapter(0, supplement?.section.text ?? '', 0,
     supplement?.section.navigation.images, supplement?.section.navigation.paragraphs), [supplement]);
-  const followLink = useCallback((href: string) => {
+  function followLink(href: string) {
+    setOverlay('none');
     const source = supplementVisible && supplement ? '/' + supplement.path.split('/').map(encodeURIComponent).join('/') : ch?.source_href ?? '';
     const target = resolveBookLink(href, source, sources, nav?.packageDir);
     if (target.kind === 'missing') {
@@ -305,7 +304,7 @@ function BookReader({ id }: { id: string }) {
         { text: target.kind === 'external' ? 'Open' : 'Go to passage',
           onPress: () => { void proceed().catch(() => toast('Link destination is unavailable')); } },
       ], { cancelable: true });
-  }, [ch, chIdx, sources, nav, doc, chs, jumpToChapter, toast, supplement, supplementVisible]);
+  }
 
   const jumpToOffset = (offset: number) => {
     const index = Math.max(0, chs.findLastIndex((row) => row.start_offset <= offset));
@@ -409,15 +408,10 @@ function BookReader({ id }: { id: string }) {
   }, [set]);
 
   // --- Progress label ---------------------------------------------------------------
-  const label = useMemo(() => {
-    if (!doc || charCount <= 0 || !ch) return '';
-    const local = Math.round(frac * ch.char_count);
-    if (percentageMode === 'chapter' && chs.length > 1 && ch.char_count > 0) {
-      const chPct = Math.round((local / ch.char_count) * 100);
-      return `Ch. ${chIdx + 1} of ${chs.length} · ${chPct}%`;
-    }
-    return `${Math.round(bookPercent(ch.start_offset + local, charCount) * 100)}% of book`;
-  }, [doc, charCount, ch, chs.length, chIdx, percentageMode, frac]);
+  const bookScope = percentageMode === 'book';
+  const progressFraction = bookScope && ch ? bookPercent(ch.start_offset + frac * ch.char_count, charCount) : frac;
+  const percent = displayPercent(scrub === null ? progressFraction : scrub / 100);
+  const label = bookScope ? `${percent}% of book` : `Ch. ${chIdx + 1} of ${chs.length} · ${percent}%`;
 
   // Ask-once progress display prompt (plan 5.8): multi-chapter docs only.
   const pmPrompt =
@@ -427,8 +421,6 @@ function BookReader({ id }: { id: string }) {
   const fontSize = BASE_FONT_SIZE * (style.size / 100);
   const marginH = (winWidth * style.mar) / 100 + Math.max(insets.left, insets.right);
   const showControls = controlsVisible || screenReader || !!loadError;
-  const embeddedCover = chIdx === 0 && nav?.images?.length === 1 && !activeText?.trim();
-  const openingCover = chIdx === 0 && (embeddedCover || !!doc?.cover_uri);
   const transition = get(SettingKeys.readerTransition);
   const duration = reducedMotion || transition === 'none' ? 0
     : { fast: 130, normal: 220, slow: 360 }[get(SettingKeys.readerTransitionSpeed)];
@@ -441,7 +433,8 @@ function BookReader({ id }: { id: string }) {
   }, [duration, pageMotion]);
   const lastRevision = useRef(0);
   useLayoutEffect(() => {
-    if (lastRevision.current !== navigationRevision) animatePage();
+    if (lastRevision.current !== navigationRevision && !skipEntrance.current) animatePage();
+    skipEntrance.current = false;
     lastRevision.current = navigationRevision;
   }, [animatePage, navigationRevision]);
   useEffect(() => {
@@ -455,6 +448,44 @@ function BookReader({ id }: { id: string }) {
     opacity: chromeMotion,
     transform: [{ translateY: chromeMotion.interpolate({ inputRange: [0, 1], outputRange: [transition === 'slide' ? edge : 0, 0] }) }],
   });
+
+  // Edge taps can step by viewport. Horizontal drags always target an adjacent chapter.
+  const turnByViewport = !screenReader && (chs.length === 1 || style.flow === 'paged' || (style.flow === 'auto' && winWidth >= 700));
+  function hideReaderControls() { setOverlay('none'); setControlsVisible(false); }
+  function passageProps(page: LoadedChapter) {
+    const cover = page.index === 0 && (!!doc?.cover_uri || (page.nav?.images?.length === 1 && !page.text.trim()));
+    return { safeTop: cover ? 0 : insets.top, safeBottom: cover ? 0 : insets.bottom, style, coverUri: doc?.cover_uri, bookTitle: doc?.title ?? '', viewportHeight, margin: marginH,
+      mediaDir: doc?.text_dir, fallbackTitle: doc?.format === 'epub' ? undefined : chs[page.index]?.title,
+      startPadding: cover ? 0 : screenReader ? Math.max(0, toolbarHeight - insets.top) + 4 : 4,
+      endPadding: (screenReader ? progressHeight + 4 : insets.bottom + 6) - (cover ? 0 : insets.bottom) };
+  }
+  function nextButtonFor(index: number) {
+    const foreground = contrastText(style.bg);
+    return get(SettingKeys.readerNextButton) && index + 1 < chs.length && (
+      <View style={{ marginHorizontal: Math.max(16, marginH), paddingTop: 20, paddingBottom: 12, alignItems: 'flex-end' }}>
+        <Pressable accessibilityRole="button" onPress={(event) => {
+        event.stopPropagation();
+        jumpToChapter(index + 1);
+      }} accessibilityLabel={'Next chapter, ' + (chs[index + 1].title ?? (index + 2))}
+        android_ripple={{ color: foreground + '28' }}
+        style={{ minHeight: 44, paddingHorizontal: 16, flexDirection: 'row', gap: 8, alignItems: 'center',
+          borderRadius: 22, overflow: 'hidden', borderWidth: 1, borderColor: foreground, backgroundColor: style.bg }}>
+          <Text style={{ color: foreground, fontWeight: '600' }}>Next chapter</Text>
+          <Icon name="arrow-forward" size={16} tone={foreground} />
+        </Pressable>
+      </View>
+    );
+  }
+  async function prepareChapter(step: Direction, atEnd: boolean) {
+    const index = chIdx + step;
+    if (!chs[index]) return null;
+    try {
+      const page = await loadChapter(index);
+      return { view: <BookPassage {...passageProps(page)} page={page} initialOffset={atEnd ? page.text.length : 0}
+        onMove={() => {}} onLink={() => {}} footer={nextButtonFor(index)} />,
+        commit: () => { void jumpToChapter(index, atEnd ? 1 : 0, page); } };
+    } catch { toast('This chapter could not be opened'); return null; }
+  }
 
   return (
     <ReaderMotion.Provider value={{ duration, slide: transition === 'slide' }}>
@@ -494,7 +525,7 @@ function BookReader({ id }: { id: string }) {
           />
         </Animated.View>
 
-        <ReaderOptionsPopup inline visible={overlay === 'menu'} onClose={() => setOverlay('none')} toolbarHeight={toolbarHeight}>
+        <ReaderOptionsPopup visible={overlay === 'menu'} onClose={() => setOverlay('none')} toolbarHeight={toolbarHeight}>
           <View className="py-1.5">
             {(
               [
@@ -508,7 +539,7 @@ function BookReader({ id }: { id: string }) {
                 onPress={() => {
                   setOverlay(icon === 'list' ? 'panel' : 'none');
                   if (icon === 'bookmark') void addBookmark();
-                  if (icon === 'settings-outline') router.push('/settings-reader' as never);
+                  if (icon === 'settings-outline') router.push({ pathname: '/settings', params: { from: 'reader' } });
                 }}
                 className="flex-row items-center gap-3 px-5 py-3.5">
                 <Icon name={icon} size={18} tone="default" />
@@ -532,52 +563,21 @@ function BookReader({ id }: { id: string }) {
           </View>
         ) : (
           <>
-            <Animated.View style={{ flex: 1, marginTop: openingCover ? 0 : insets.top, marginBottom: openingCover ? 0 : insets.bottom,
+            <Animated.View style={{ flex: 1,
               opacity: pageMotion, transform: [{ translateX: pageMotion.interpolate({
               inputRange: [0, 1], outputRange: [transition === 'slide' ? direction * winWidth * 0.20 : 0, 0],
             }) }] }}>
-              <ChunkedChapter
-                key={[chIdx, navigationRevision, !!nav?.presentationVersion, winWidth, style.fam, style.size, style.lh,
-                  style.wt, style.mar, style.align].join('/')}
-                chunks={chunks}
-                startPadding={openingCover ? 0 : screenReader ? Math.max(0, toolbarHeight - insets.top) + 4 : 4}
-                endPadding={(screenReader ? progressHeight + 4 : insets.bottom + 6) - (openingCover ? 0 : insets.bottom)}
-                coverHeight={embeddedCover ? viewportHeight : undefined}
-                publisherStyles={nav?.styles} paragraphs={nav?.paragraphs} mediaDir={doc?.text_dir}
-                links={links}
-                linkColor={linkColor(style.bg)}
-                onLink={followLink}
-                length={activeText.length}
-                initialOffset={() => Math.max(0, Math.min(ch.char_count, lastOffset.current - ch.start_offset))}
-                margin={marginH}
-                textStyle={{ color: style.tx, fontFamily, fontWeight: String(style.wt) as '400',
-                  fontSize, lineHeight: Math.round(fontSize * style.lh), textAlign: style.align }}
-                onMove={(offset) => recordPosition(chIdx, offset)}
-                onToggleControls={() => setControlsVisible((visible) => !visible)}
-                onScrollStart={() => setControlsVisible(false)}
-                paged={!screenReader && (style.flow === 'paged' || (style.flow === 'auto' && winWidth >= 700))}
-                onPageTurn={(step) => { setDirection(step); setControlsVisible(false); animatePage(); }}
+              <BookPassage key={[chIdx, navigationRevision, winWidth, style.fam, style.size, style.lh,
+                style.wt, style.mar, style.align, style.indentParagraphs, style.indentLength].join('/')}
+                {...passageProps(loaded!)} page={loaded!} initialOffset={() => Math.max(0, Math.min(ch.char_count, lastOffset.current - ch.start_offset))}
+                onMove={offset => recordPosition(chIdx, offset)} onLink={followLink}
+                onToggleControls={() => { setOverlay('none'); setControlsVisible(overlay !== 'none' ? false : !controlsVisible); }}
+                onScrollStart={hideReaderControls} paged={turnByViewport} edgeTaps={!screenReader && get(SettingKeys.readerEdgeTaps)}
+                onPageTurn={step => { setDirection(step); hideReaderControls(); animatePage(); }}
+                prepareChapter={prepareChapter}
                 onChapterSwipe={chs.length > 1 && !screenReader ? (step, atEnd) => jumpToChapter(chIdx + step, atEnd ? 1 : 0) : undefined}
-                footer={get(SettingKeys.readerNextButton) && chIdx + 1 < chs.length && (
-                  <Pressable accessibilityRole="button" onPress={(event) => {
-                    event.stopPropagation();
-                    jumpToChapter(chIdx + 1);
-                  }} accessibilityLabel={'Next chapter, ' + (chs[chIdx + 1].title ?? (chIdx + 2))}
-                    style={({ pressed }) => ({ minHeight: 44, alignSelf: 'center', marginVertical: 8,
-                      paddingHorizontal: 18, flexDirection: 'row', gap: 8, alignItems: 'center', borderRadius: 22,
-                      backgroundColor: accent.hex, opacity: pressed ? 0.75 : 1 })}>
-                    <Text style={{ color: contrastText(accent.hex), fontWeight: '600' }}>Next chapter</Text>
-                    <Icon name="arrow-forward" size={16} tone={contrastText(accent.hex)} />
-                  </Pressable>
-                )}>
-                {openingCover && !embeddedCover && doc?.cover_uri && (
-                  <ReaderCover uri={doc.cover_uri} label={doc.title + ' cover'} height={viewportHeight} />
-                )}
-                {doc?.format !== 'epub' && ch.title && !activeText.startsWith(ch.title + '\n') && activeText !== ch.title && (
-                  <Text accessibilityRole="header" style={{ color: style.tx, fontFamily, fontWeight: '600',
-                    fontSize: fontSize * 1.3, marginBottom: 8, marginHorizontal: marginH }}>{ch.title}</Text>
-                )}
-              </ChunkedChapter>
+                footer={nextButtonFor(chIdx)} />
+
             </Animated.View>
 
             {/* Bottom bar: chapter title, percent, scrubber (prototype `.bot`) */}
@@ -593,17 +593,21 @@ function BookReader({ id }: { id: string }) {
                   {ch.title ?? `Chapter ${chIdx + 1}`}
                 </Text>
                 <Text className="font-ui text-tx text-[15px] font-semibold">
-                  {label || Math.round(frac * 100) + '%'}
+                  {label}
                 </Text>
               </View>
               <Slider
-                accessibilityLabel="Chapter position"
+                accessibilityLabel={bookScope ? 'Book position' : 'Chapter position'}
                 style={{ width: '100%', height: 28 }}
                 minimumValue={0}
                 maximumValue={100}
-                value={Math.round(frac * 100)}
-                onValueChange={(value) => setFrac(value / 100)}
-                onSlidingComplete={(value) => jumpToChapter(chIdx, value / 100)}
+                value={progressFraction * 100}
+                disabled={bookScope ? charCount === 0 : ch.char_count === 0}
+                onValueChange={setScrub}
+                onSlidingComplete={(value) => {
+                  const target = bookScope ? bookSliderDestination(value, chs, charCount) : { index: chIdx, fraction: value / 100 };
+                  void jumpToChapter(target.index, target.fraction);
+                }}
                 minimumTrackTintColor={accent.hex}
                 maximumTrackTintColor={'rgb(' + ThemePalettes[themeName].sf2.replace(/ /g, ',') + ')'}
                 thumbTintColor={accent.hex}
@@ -611,6 +615,36 @@ function BookReader({ id }: { id: string }) {
             </Animated.View>
           </>
         )}
+        {/* Overflow panel: contents / annotations / bookmarks */}
+        <ContentsPanel
+          visible={overlay === 'panel'}
+          onClose={() => setOverlay('none')}
+          chapters={chs}
+          currentIndex={chIdx}
+          bookmarks={bms}
+          highlights={hls}
+          readChapter={readForSearch}
+          onJumpChapter={jumpToChapter}
+          onJumpOffset={jumpToOffset}
+          onDeleteBookmark={deleteBookmark}
+          onDeleteHighlight={deleteHighlight}
+        />
+
+        {/* Aa display popup (flow, brightness, theme, size, align, margin) */}
+        <DisplayPopup
+          visible={overlay === 'display'}
+          toolbarHeight={toolbarHeight}
+          onClose={() => setOverlay('none')}
+          style={scope === 'book' ? style : defaultStyle}
+          scope={scope}
+          onScopeChange={setScope}
+          hasOverride={hasOverride}
+          onResetBook={resetBook}
+          brightness={brightnessSetting}
+          onBrightness={setBrightness}
+          onPatch={applyStyle}
+        />
+
       </View>
 
       {supplement && (
@@ -623,46 +657,16 @@ function BookReader({ id }: { id: string }) {
                 </Text>
                 <IconButton icon="close" label="Return to reading" tone={style.tx} onPress={() => setSupplementVisible(false)} />
               </View>
-              <ChunkedChapter key={supplement.revision} chunks={supplementChunks}
+              <ChunkedChapter key={[supplement.revision, style.indentParagraphs, style.indentLength].join('/')} chunks={supplementChunks}
                 publisherStyles={supplement.section.navigation.styles} paragraphs={supplement.section.navigation.paragraphs} mediaDir={doc?.text_dir}
                 length={supplement.section.text.length} links={supplement.section.navigation.links}
                 linkColor={linkColor(style.bg)} onLink={followLink} initialOffset={supplement.offset}
                 margin={winWidth * style.mar / 100} textStyle={{ color: style.tx, fontFamily, fontSize, lineHeight: Math.round(fontSize * style.lh) }}
-                onMove={() => {}} footer={null}>{null}</ChunkedChapter>
+                indent={style.indentParagraphs ? style.indentLength : 0} onMove={() => {}} footer={null}>{null}</ChunkedChapter>
             </View>
           </Screen>
         </ReaderOverlay>
       )}
-
-      {/* Overflow panel: contents / annotations / bookmarks */}
-      <ContentsPanel
-        visible={overlay === 'panel'}
-        onClose={() => setOverlay('none')}
-        chapters={chs}
-        currentIndex={chIdx}
-        bookmarks={bms}
-        highlights={hls}
-        readChapter={readForSearch}
-        onJumpChapter={jumpToChapter}
-        onJumpOffset={jumpToOffset}
-        onDeleteBookmark={deleteBookmark}
-        onDeleteHighlight={deleteHighlight}
-      />
-
-      {/* Aa display popup (flow, brightness, theme, size, align, margin) */}
-      <DisplayPopup
-        visible={overlay === 'display'}
-        toolbarHeight={Math.max(0, toolbarHeight - insets.top)}
-        onClose={() => setOverlay('none')}
-        style={scope === 'book' ? style : defaultStyle}
-        scope={scope}
-        onScopeChange={setScope}
-        hasOverride={hasOverride}
-        onResetBook={resetBook}
-        brightness={brightnessSetting}
-        onBrightness={setBrightness}
-        onPatch={applyStyle}
-      />
 
       {/* In-book search with history */}
       <SearchOverlay

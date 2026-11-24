@@ -1,4 +1,5 @@
 import React from 'react';
+import { useLocalSearchParams } from 'expo-router';
 import { ScrollView } from 'react-native';
 
 import { AppBar, Screen } from '@/components/chrome/app-bar';
@@ -11,8 +12,9 @@ export function SettingsPage({
   title: string;
   children: React.ReactNode;
 }) {
+  const { from } = useLocalSearchParams<{ from?: string }>();
   return (
-    <Screen>
+    <Screen showNav={from !== 'reader'}>
       <AppBar title={title} leading="back" />
       <ScrollView contentContainerStyle={{ padding: 12, paddingBottom: 32 }}>
         {children}

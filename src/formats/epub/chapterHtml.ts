@@ -155,9 +155,10 @@ export function extractChapterHtml(html: string, chapter = '', assets?: Publicat
     }
     currentBlock = { offset: 0, gap, blankLines, indent };
     const heading = elements.findLast(el => /^h[1-6]$/.test(el.tag) || el.attrs.role === 'heading');
+    const align = elements.findLast(el => el.block.align)?.block.align;
+    if (heading || align === 'center' || align === 'right') currentBlock.align = align;
     if (heading) {
       currentBlock.heading = true;
-      currentBlock.align = elements.findLast(el => el.block.align)?.block.align;
       currentBlock.ruleBelow = heading.block.ruleBelow;
       const scale = heading.style.scale ?? 1;
       if (heading.block.widthEm != null) currentBlock.widthEm = heading.block.widthEm * scale;

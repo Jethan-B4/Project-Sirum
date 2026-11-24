@@ -10,6 +10,20 @@ export interface BookPosition {
 
 const DEFAULT_SNIPPET_LENGTH = 100;
 
+/** Keep 100% for a position at the end of the selected range. */
+export function displayPercent(fraction: number) {
+  return fraction >= 1 ? 100 : Math.min(99, Math.round(fraction * 100));
+}
+
+export function bookSliderDestination(value: number, chapters: readonly { start_offset: number; char_count: number }[], count: number) {
+  if (!chapters.length || value <= 0) return { index: 0, fraction: 0 };
+  if (value >= 100) return { index: chapters.length - 1, fraction: 1 };
+  const offset = Math.round(count * value / 100);
+  const index = Math.max(0, chapters.findLastIndex(ch => ch.start_offset <= offset));
+  const chapter = chapters[index];
+  return { index, fraction: chapterPercent(offset - chapter.start_offset, chapter.char_count) };
+}
+
 /** Book-wide percentage */
 export function bookPercent(charOffset: number, charCount: number): number {
   if (charCount <= 0) return 0;

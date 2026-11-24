@@ -91,14 +91,15 @@ export function ContentsPanel({
       : undefined;
 
   return (
-    <ReaderOverlay visible={visible} onClose={onClose}>
-      <View className="flex-1 flex-row justify-end">
-        <Pressable className="absolute inset-0 bg-black/55" onPress={onClose} />
+    <ReaderOverlay inline visible={visible} onClose={onClose}>
+      <View pointerEvents="box-none" className="flex-1 flex-row justify-end">
         <View
           className="bg-surface h-full"
           style={{ width: '78%', maxWidth: 340, paddingTop: insets.top, paddingRight: insets.right, paddingBottom: insets.bottom }}>
           {/* Tab bar */}
           <View className="flex-row border-b border-line pt-3">
+            <Pressable accessibilityRole="button" accessibilityLabel="Close contents" onPress={onClose}
+              className="items-center justify-center px-3"><Icon name="close" size={20} /></Pressable>
             {TABS.map(([key, icon, label]) => {
               const on = tab === key;
               return (

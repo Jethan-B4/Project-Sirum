@@ -642,7 +642,7 @@ documentDirectory/books/{documentId}/
   original.epub
   chapters/0000.txt
   chapters/0001.txt
-  chapters/0000.presentation-v4.json
+  chapters/0000.presentation-v5.json
   chapters/publication-assets.json
   chapters/media-0.png
   cover.jpg
@@ -711,18 +711,22 @@ Rendering a whole chapter, let alone a whole book, as one `<Text>` will freeze o
 
 ### 5.6.1 Reader screen layout and features
 
-The local reader prototype and Android reference captures are in `local/`. See the reference inventory in `development-progress.md`. Both reading flows render a bounded window of chunks around the current passage.
+The local reader prototype and Android reference captures are in `local/`. See the reference inventory in `development-progress.md`. Both flows keep the full chapter scroll extent. Longer chapters reserve space for offscreen chunks and mount paragraphs around the viewport.
 
 - **Top bar:** back, book title, in-book search, display (Aa), and an overflow menu with **Add bookmark**, **Contents**, and **Settings**.
 - **Bottom bar:** current chapter title, a percentage, and a scrubber. The percentage and scrubber follow `reader.percentageMode` (5.8).
 - Open the reader with the controls tucked away. Tapping the passage shows compact controls over the existing viewport. A vertical drag hides them. Keep controls accessible to screen readers and respect system safe areas.
 - Give the opening cover a full viewport in either orientation. Contain the artwork and fill the surrounding space with a dimmed, blurred copy. The first chapter or contents begins after the cover. Use the EPUB's own headings in the passage and its navigation label in the footer.
-- Reader settings persist the Next chapter button preference and the Fade, Slide or None transition with Fast, Normal or Slow timing. Honor system Reduce Motion. Keep the previous passage visible until the destination chapter is ready.
+- Reader settings persist edge taps, the Next chapter button and transition style and speed. Fade and Slide follow a horizontal drag, hold at the finger position, and settle or cancel on release. None and system Reduce Motion turn on release. Only a completed turn updates reading progress.
+- Opening Settings from a book carries the reader context through its categories. Back returns through the settings stack to the same book. The Library, History, Import and Settings bar stays available on the ordinary app settings route.
+- Aa, More and Contents accept touches within their panels. An exposed passage remains available for scrolling, page turns and links.
 - **Aa** and **More** open below the toolbar at its trailing edge. Keep the display title and close action visible, group settings into Text, Colors and Layout, and allow the controls to scroll on short screens.
 - In scrolled flow, a horizontal swipe across the passage opens the next chapter when swiping left and the previous chapter when swiping right. Open the destination at its start, preserve the existing progress-saving behavior, and stop at the first and last chapters. Keep the scrubber, links, and display controls independently interactive.
 - **Contents panel** (opens from the right, three tabs): **Contents** (chapter list from `document_chapters`, current chapter highlighted, tap to jump), **Annotations** (highlights and notes), and **Bookmarks** (chapter and percent, tap to jump).
 - **Display popup** (from Aa):
-  - **Flow:** Auto, Paged, or Scrolled. Paged moves by a viewport with a line of overlap. Tap the outer thirds or swipe horizontally to turn and tap the center for controls. Auto enables these turns at widths of 700 logical pixels or more.
+  - **Flow:** Auto, Paged, or Scrolled. Paged moves by a viewport with a line of overlap. When edge taps are enabled, the left and right thirds turn backward and forward in the current flow. When disabled, taps toggle controls and swipes still turn. Auto selects paged flow at widths of 700 logical pixels or more.
+  - Single-chapter books, including TXT, use viewport turns in either flow.
+  - **First-line indent:** Off by default. Aa and Reader settings offer one to four em spaces. The reader applies the indent at the start of a body paragraph and preserves canonical offsets, heading layout and list markers.
   - **Brightness:** `expo-brightness` or a dimming overlay, stored as `device.readerBrightness`; restore the system value on exit.
   - **Theme:** swatches (white, dark gray, black, sepia) plus custom background and text colors.
   - **Text size** (percent), **text align** (left or justify), and **margin** (percent of width), each with minus and plus controls.
@@ -742,7 +746,7 @@ The local reader prototype and Android reference captures are in `local/`. See t
 
 ### 5.8 Progress display and the percentage setting
 
-The setting `reader.percentageMode` controls what the reader shows next to the scrubber and in the progress label.
+The setting `reader.percentageMode` controls the progress label, slider thumb and seek destination. It is available in Aa → Layout and Settings → Reader. A horizontal swipe opens the adjacent chapter at its beginning in every flow. Paged edge taps still move by viewport.
 
 | Mode | Shown | Computed as |
 |---|---|---|

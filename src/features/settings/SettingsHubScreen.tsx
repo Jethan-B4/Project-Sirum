@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import React from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
@@ -23,18 +23,20 @@ const CATEGORIES: {
 
 export default function SettingsHubScreen() {
   const router = useRouter();
+  const { from } = useLocalSearchParams<{ from?: string }>();
+  const fromReader = from === 'reader';
   const { get } = useSettings();
   const navMode = get(SettingKeys.deviceNavMode);
 
   return (
-    <Screen>
-      <AppBar title="Settings" leading={navMode === 'side' ? 'menu' : 'none'} />
+    <Screen showNav={!fromReader}>
+      <AppBar title="Settings" leading={fromReader ? 'back' : navMode === 'side' ? 'menu' : 'none'} />
       <ScrollView contentContainerStyle={{ padding: 12, paddingBottom: 24 }}>
         {CATEGORIES.map((c) => (
           <Pressable
             key={c.route}
             accessibilityRole="button"
-            onPress={() => router.push(c.route as never)}
+            onPress={() => router.push({ pathname: c.route, params: fromReader ? { from: 'reader' } : {} } as Href)}
             className="flex-row items-center gap-5 px-2 py-4"
             style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}>
             <Icon name={c.icon} size={24} tone="accent" />

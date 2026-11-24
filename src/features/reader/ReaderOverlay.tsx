@@ -30,7 +30,7 @@ export function ReaderOverlay({ visible, inline, onClose, children }: {
   }, [inline, visible, onClose]);
   if (!visible && !mounted) return null;
   const surface = (
-    <Animated.View pointerEvents={visible ? 'auto' : 'none'} accessibilityViewIsModal={visible}
+    <Animated.View pointerEvents={visible ? (inline ? 'box-none' : 'auto') : 'none'} accessibilityViewIsModal={visible && !inline}
       accessibilityElementsHidden={!visible} importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
       style={[inline ? [StyleSheet.absoluteFill, { zIndex: 20 }] : { flex: 1 }, { opacity: progress,
         transform: [{ translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [slide ? 16 : 0, 0] }) }] }]}>

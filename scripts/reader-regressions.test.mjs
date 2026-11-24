@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chunkChapter, findChunkForOffset, paragraphRows } from '../src/text/chunk.ts';
+import { chunkChapter, findChunkForOffset, paragraphRows, plainParagraphs } from '../src/text/chunk.ts';
 import { resumePosition } from '../src/features/reader/resume.ts';
+import { bookSliderDestination, displayPercent } from '../src/text/position.ts';
 import { searchBook } from '../src/features/reader/searchBook.ts';
 
 const chapters = Array.from({ length: 600 }, (_, i) => ({
@@ -10,6 +11,35 @@ const chapters = Array.from({ length: 600 }, (_, i) => ({
   start_offset: i * 2000,
   char_count: 2000,
 }));
+
+test('book scrubber seeks across uneven chapters and includes textless endpoint covers', () => {
+  const rows = [0, 300, 100, 0].map((char_count, index) => ({ char_count, start_offset: [0, 0, 300, 400][index] }));
+  for (const [value, index, fraction] of [[0, 0, 0], [37.5, 1, 0.5], [75, 2, 0], [87.5, 2, 0.5], [100, 3, 1]]) {
+    assert.deepEqual(bookSliderDestination(value, rows, 400), { index, fraction });
+  }
+  assert.equal(displayPercent(0.999), 99);
+  assert.equal(displayPercent(1), 100);
+});
+
+test('centered EPUB part titles retain their alignment, scale and canonical offsets', async () => {
+  const { extractChapterHtml } = await import('../src/formats/epub/chapterHtml.ts');
+  const { text, navigation } = extractChapterHtml('<style>.MsoNormal4{text-align:center}.large{font-size:1.67em}</style>' +
+    '<p class="MsoNormal4"><b><span class="large">PART I</span></b></p>' +
+    '<p class="MsoNormal4"><b><span class="large">“THE SPARK”</span></b></p><p>Body</p>');
+  assert.equal(text, 'PART I\n“THE SPARK”\nBody');
+  assert.deepEqual(navigation.paragraphs.map(p => [p.offset, p.align]), [[0, 'center'], [7, 'center'], [19, undefined]]);
+  assert.ok(navigation.styles.some(span => span.style.scale === 1.67 && span.style.bold));
+});
+
+test('plain-text indentation uses real paragraph starts across chunk cuts and blank lines', () => {
+  const text = '🦊'.repeat(1900) + '\n\n  Typed leading spaces\n' + 'More\n'.repeat(65);
+  const paragraphs = plainParagraphs(text);
+  const rows = chunkChapter(0, text, 0, [], paragraphs).flatMap(chunk => paragraphRows(chunk, paragraphs));
+  assert.equal(rows.map(row => row.text).join(''), text);
+  assert.deepEqual(rows.filter(row => row.first).map(row => row.startOffset), paragraphs.map(p => p.offset));
+  assert.ok(rows.some(row => !row.first && row.text.startsWith('🦊')));
+  assert.equal(rows.find(row => row.text.startsWith('  Typed')).startOffset, text.indexOf('  Typed'));
+});
 
 test('resume opens the saved chapter even at a shared boundary', () => {
   for (const index of [0, 499, 599]) {

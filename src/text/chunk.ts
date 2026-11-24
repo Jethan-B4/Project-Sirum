@@ -36,6 +36,18 @@ export function paragraphRows(chunk: Chunk, paragraphs: ChapterParagraph[]) {
 
 const CHUNK_SIZE = 3000; // target ~3 KB per chunk at paragraph boundaries
 
+/** Supply row starts for plain text when the reader applies first-line indentation. */
+export function plainParagraphs(text: string): ChapterParagraph[] {
+  const rows: ChapterParagraph[] = [];
+  for (let at = 0; at < text.length;) {
+    rows.push({ offset: at, gap: 0, blankLines: 0, indent: 0 });
+    const newline = text.indexOf('\n', at);
+    if (newline < 0) break;
+    at = newline + 1;
+  }
+  return rows;
+}
+
 /**
  * Split chapter text into Chunks at \n boundaries, up to CHUNK_SIZE chars each.
  * chapterStartOffset is the chapter's global start_offset.
