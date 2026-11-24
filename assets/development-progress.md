@@ -2,7 +2,7 @@
 
 Tracks implementation status against `offline-reader-dev-plan.md`. Update this file as milestones complete.
 
-**Last updated:** 2026-11-23
+**Last updated:** 2026-11-24
 
 ---
 
@@ -23,6 +23,21 @@ Tracks implementation status against `offline-reader-dev-plan.md`. Update this f
 Legend: ✅ done · 🟢 advanced / nearly done · 🟡 partial · ⬜ not started
 
 ---
+
+## Reader layout and transitions (2026-11-24)
+
+- Covers occupy the reader viewport in portrait and landscape. The same layout handles a separate library cover and an image-only first spine item. The reader displays EPUB headings in the passage and the chapter's contents label in the compact progress bar.
+- EPUB presentation version 4 records heading alignment, small caps, constrained width, bottom rules and hidden heading labels. Presentation can be rebuilt from the saved EPUB while retaining canonical text offsets.
+- Reader settings control the Next chapter button and the style and speed of chapter and page turns. The toolbar, footer and reader panels animate on the native driver. System Reduce Motion takes precedence. Paged flow advances by roughly a screen with overlap, and Auto enables page turns on wide screens.
+- **Local references.** The ignored `local/` directory holds three Expo Go screenshots of Sirum and one comparison-reader screenshot dated November 24. Use them to compare the cover landing, the “Chapter 1: Crimson” heading, toolbar height and progress footer. It also contains the Library and Reader HTML prototypes, five EPUB fixtures (Lord of the Mysteries and four Overgeared editions), and a PDF sample. These are developer test materials and stay outside the app package.
+- On the Android API 37 emulator, an EPUB with an image-only opening chapter filled the 1080 × 2400 portrait and 2400 × 1080 landscape viewport. A page turn advanced from passage 0 to passage 11 and returned to passage 0. A vertical drag hid the controls. The Hide, Slide and Slow choices persisted after leaving settings, and enabling the button again opened the expected chapter. The local Lord of the Mysteries stylesheet produced a centered, small-cap heading with an 80% width limit and a two-pixel bottom rule.
+- Expo Go's manual picker returned a cached file URI it could not read during this check. Android folder scan imported the same test EPUB successfully. Physical-device frame timing and iOS interaction are still pending.
+
+## Publisher spacing and nested lists (2026-11-24)
+
+- EPUB stylesheets can use direct-child selectors such as `ol.steps > li` to format one list level. These selectors also work alongside descendant selectors in the same rule.
+- A quotation or list can set the space above its first paragraph and below its last. Nested margins use the largest adjoining gap. Stored books rebuild this presentation from their local EPUB when the extracted chapter text matches the saved text.
+- Regression fixtures cover nested lists, quotations and mixed selectors. A check of 25 chapters across five local EPUBs verified that rendered rows reconstruct the extracted text and that link and style ranges stay inside it. A simulated storage check covered simultaneous cache upgrades and fallback to the previous formatting when saved text differs.
 
 ## Paragraphs and lists in the reader (2026-11-23)
 
@@ -311,7 +326,7 @@ The screens, layout, and interactions from `sirum-ui-prototype.html` are impleme
 | M2 Data layer | Migrations + repos + tests | 🟡 Migrations & repos done; no tests yet |
 | M3 TXT slice | Import/read/save/restore TXT offline | ✅ Implemented and verified |
 | M4 EPUB reader | Full EPUB pipeline + UI features | ✅ Full EPUB extraction (OPF, TOC, covers, DRM detection) & redesigned UI |
-| M4b Reader screen parity | Contents panel, display popup, in-book search, scrubber (5.6.1) | 🟢 Mostly done | Scrolled flow only — **paged flow not implemented**; highlight/note creation UI still pending (M5); windowed rendering implemented, device profiling pending |
+| M4b Reader screen parity | Contents panel, display popup, in-book search, scrubber (5.6.1) | 🟢 Mostly done | Scrolled flow and viewport page turns implemented. Line-aligned pagination and physical-device profiling remain open. |
 | M5 PDF + annotations | pdf.js extraction; bookmarks/highlights/notes | 🟡 Partial | Bookmarks UI done; highlights list/delete only (no creation); PDF not started |
 | M6 Backend | Schema + RLS + triggers verified | 🟡 SQL written, unverified |
 | M7 Google sign-in | EAS dev build, sign in/out | ⬜ Not started |
@@ -325,7 +340,7 @@ The screens, layout, and interactions from `sirum-ui-prototype.html` are impleme
 
 ### Immediate (Phase 3 remaining)
 
-1. **Paged flow** — `reader.style.flow` accepts `paged`/`auto` but rendering is always scrolled (plan 5.6.1: paged paginates lazily with tap zones; auto picks paged on wide screens).
+1. **Page boundaries.** Profile viewport turns in heavily illustrated chapters. Exact line-aligned pagination and physical-device frame measurements remain open.
 2. **PDF importer** — `react-native-webview` + pdf.js spike per plan 5.4.
 3. **Highlight/note creation UI** — annotations tab lists existing rows only; text-selection anchoring is M5 scope (plan 5.11).
 4. **Reactive reads** — repository change notifications so library updates without focus reloads (plan 4.6).

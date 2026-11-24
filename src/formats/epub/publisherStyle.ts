@@ -1,5 +1,5 @@
 import { Parser } from 'htmlparser2';
-import type { PublisherStyle } from '../types';
+import type { ChapterParagraph, PublisherStyle } from '../types';
 
 export interface PublicationAssets {
   css: Map<string, string>;
@@ -16,9 +16,13 @@ export function resourcePath(chapter: string, href: string) {
   } catch { return ''; }
 }
 
-type BlockStyle = { before?: number; after?: number; listType?: string };
+type BlockStyle = Pick<ChapterParagraph, 'align' | 'ruleBelow' | 'hidden' | 'widthEm' | 'maxWidthPercent' | 'centerBlock' | 'paddingBelow'> & {
+  before?: number; after?: number; listType?: string;
+};
 type Element = { tag: string; attrs: Record<string, string>; style: PublisherStyle; block: BlockStyle };
-type Rule = { selectors: string[]; weight: number; declarations: string };
+// Each group is a direct-child chain. Whitespace between groups permits any ancestor.
+// Both groups and their members are stored right-to-left to match from the styled element.
+type Rule = { groups: string[][]; weight: number; declarations: string };
 const parsedSheets = new WeakMap<PublicationAssets, Map<string, Rule[]>>();
 
 function parseRules(css: string): Rule[] {
@@ -30,11 +34,13 @@ function parseRules(css: string): Rule[] {
     if (css[i] === '{' && depth++ === 0) opening = i;
     if (css[i] !== '}' || --depth !== 0) continue;
     for (const selector of css.slice(start, opening).trim().split(',')) {
-      const selectors = selector.trim().split(/\s+/);
+      const groups = selector.trim().replace(/\s*>\s*/g, '>').split(/\s+/)
+        .reverse().map((group) => group.split('>').reverse());
+      const selectors = groups.flat();
       if (!selectors.every((part) => /^(?:\*|[a-z][\w-]*)?(?:[.#][\w-]+)*$/i.test(part) && part)) continue;
       const weight = selectors.reduce((n, part) => n + (part.match(/#/g)?.length ?? 0) * 100
         + (part.match(/\./g)?.length ?? 0) * 10 + Number(/^[a-z]/i.test(part)), 0);
-      rules.push({ selectors, weight, declarations: css.slice(opening + 1, i) });
+      rules.push({ groups, weight, declarations: css.slice(opening + 1, i) });
     }
     start = i + 1;
   }
@@ -75,6 +81,20 @@ function matches(element: Element, selector: string) {
     ? element.attrs.id === token.slice(1) : element.attrs.class?.split(/\s+/).includes(token.slice(1)));
 }
 
+function matchesRule(element: Element, parents: Element[], groups: string[][]) {
+  let at = parents.length;
+  for (const [index, chain] of groups.entries()) {
+    while (true) {
+      if (at + 1 < chain.length) return false;
+      if (chain.every((selector, offset) => matches(parents[at - offset] ?? element, selector))) break;
+      if (index === 0) return false;
+      at--;
+    }
+    at -= chain.length;
+  }
+  return true;
+}
+
 function spacing(value: string) {
   const match = /^(\d*\.?\d+)(em|rem|px|pt)?$/.exec(value);
   if (!match || (!match[2] && Number(match[1]) !== 0)) return undefined;
@@ -85,8 +105,20 @@ function apply(style: PublisherStyle, block: BlockStyle, declarations: string, p
   for (const decl of declarations.toLowerCase().split(';')) {
     const [name, value] = decl.split(':').map((s) => s.trim());
     if (!value) continue;
+    if (name === 'text-align' && (value === 'left' || value === 'right' || value === 'center' || value === 'justify')) block.align = value;
+    if (name === 'font-variant' || name === 'font-variant-caps') style.smallCaps = value === 'small-caps';
+    if (name === 'display') block.hidden = value === 'none';
+    if (name === 'width' && /^\d*\.?\d+em$/.test(value)) block.widthEm = parseFloat(value);
+    if (name === 'max-width' && /^\d*\.?\d+%$/.test(value)) block.maxWidthPercent = Math.min(100, parseFloat(value));
+    if (name === 'padding-bottom') block.paddingBelow = spacing(value);
+    if (name === 'border-bottom') {
+      const width = value.match(/(?:^|\s)(\d+(?:\.\d+)?)px(?:\s|$)/);
+      block.ruleBelow = /\bsolid\b/.test(value) ? Math.min(4, width ? Number(width[1]) : 1) : 0;
+    }
+    if (name === 'font-size' && /^0(?:px|em|%)?$/.test(value)) style.scale = 0;
     if (name === 'margin' || name === 'margin-block') {
       const sides = value.split(/\s+/);
+      if (name === 'margin') block.centerBlock = sides[1] === 'auto' && (sides[3] ?? sides[1]) === 'auto';
       const before = spacing(sides[0]);
       const after = spacing((name === 'margin' ? sides[2] : sides[1]) ?? sides[0]);
       if (before !== undefined) block.before = before;
@@ -122,16 +154,10 @@ export function styledElement(tag: string, attrs: Record<string, string>, parent
   if (tag === 'u') style.underline = true;
   if (/^h[1-6]$/.test(tag)) style.scale = parentScale * [1.55, 1.4, 1.25, 1.15, 1.1, 1][Number(tag[1]) - 1];
   if (tag === 'small') style.scale = parentScale * 0.85;
-  for (const { selectors, declarations } of rules) {
-    if (!matches(element, selectors[selectors.length - 1])) continue;
-    let index = parents.length - 1;
-    const ancestorsMatch = selectors.slice(0, -1).reverse().every((selector) => {
-      while (index >= 0 && !matches(parents[index], selector)) index--;
-      return index-- >= 0;
-    });
-    if (ancestorsMatch) apply(style, block, declarations, parentScale);
+  for (const { groups, declarations } of rules) {
+    if (matchesRule(element, parents, groups)) apply(style, block, declarations, parentScale);
   }
   if (attrs.style) apply(style, block, attrs.style, parentScale);
-  if (style.scale !== undefined) style.scale = Math.max(0.7, Math.min(2, style.scale));
+  if (style.scale) style.scale = Math.max(0.7, Math.min(2, style.scale));
   return element;
 }

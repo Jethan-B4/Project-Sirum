@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, Text, View, useWindowDimensions, type TextStyle, type NativeScrollEvent } from 'react-native';
 import { Image } from 'expo-image';
+import { ReaderCover } from './ReaderCover';
 import { GestureDetector, ScrollView as GestureScrollView, usePanGesture } from 'react-native-gesture-handler';
 import { linksInRange } from '@/text/links';
 import type { BookLink, ChapterNavigation } from '@/formats/types';
@@ -47,11 +48,12 @@ const LinkedText = React.memo(function LinkedText({ chunk, links, styles, textSt
       if (from < left) nodes.push(text.slice(from, left));
       const start = Math.max(from, left);
       const stop = Math.min(to, right);
-      const { bold, italic, underline, strike, scale } = span.style;
+      const { bold, italic, underline, strike, scale, smallCaps } = span.style;
       const fontSize = textStyle.fontSize ?? 17;
       const style: TextStyle = {
         ...(bold && { fontWeight: 'bold' }),
         ...(italic && { fontStyle: 'italic' }),
+        ...(smallCaps && { fontVariant: ['small-caps'] }),
         ...(underline || strike ? { textDecorationLine: underline && strike ? 'underline line-through' : underline ? 'underline' : 'line-through' } : {}),
         ...(scale && scale !== 1 ? { fontSize: fontSize * scale, lineHeight: Math.round((textStyle.lineHeight ?? fontSize) * scale) } : {}),
       };
@@ -78,12 +80,14 @@ const LinkedText = React.memo(function LinkedText({ chunk, links, styles, textSt
   return <>{parts}{styledText(cursor, text.length)}</>;
 });
 
-function PassageText({ part, styles, links, textStyle, color, onLink, onLines }: {
+function PassageText({ part, styles, links, textStyle, color, onLink, onLines, heading }: {
   part: Chunk; styles: ChapterNavigation['styles']; links: BookLink[]; textStyle: TextStyle;
   color: string; onLink(href: string): void; onLines(lines: Line[]): void;
+  heading?: boolean;
 }) {
   return (
     <Text
+      accessibilityRole={heading ? 'header' : undefined}
       style={[textStyle, { flexShrink: 1, flexGrow: 1 }]}
       onTextLayout={(e) => {
         let cursor = 0;
@@ -113,6 +117,8 @@ export function ChunkedChapter({
   onToggleControls,
   onScrollStart,
   onChapterSwipe,
+  paged = false,
+  onPageTurn,
   margin,
   textStyle,
   publisherStyles,
@@ -120,6 +126,7 @@ export function ChunkedChapter({
   mediaDir,
   endPadding = 12,
   startPadding = 12,
+  coverHeight,
   children,
   footer,
 }: {
@@ -132,7 +139,9 @@ export function ChunkedChapter({
   onMove(offset: number): void;
   onToggleControls?: () => void;
   onScrollStart?: () => void;
-  onChapterSwipe?: (direction: -1 | 1) => void;
+  onChapterSwipe?: (direction: -1 | 1, atEnd?: boolean) => void;
+  paged?: boolean;
+  onPageTurn?: (direction: -1 | 1) => void;
   margin: number;
   textStyle: TextStyle;
   publisherStyles?: ChapterNavigation['styles'];
@@ -140,6 +149,8 @@ export function ChunkedChapter({
   mediaDir?: string | null;
   startPadding?: number;
   endPadding?: number;
+  /** Full viewport for the opening illustration of an image-only cover chapter. */
+  coverHeight?: number;
   children: React.ReactNode;
   footer: React.ReactNode;
 }) {
@@ -163,15 +174,33 @@ export function ChunkedChapter({
   const seeking = useRef(initialOffset > 0);
   const moving = useRef(false);
   const lastY = useRef(0);
+  const scrollY = useRef(0);
+  const lastReported = useRef<number | undefined>(undefined);
+  function turn(step: -1 | 1) {
+    const { content, viewport } = dimensions.current;
+    if (!paged) { onChapterSwipe?.(step); return; }
+    if (coverHeight && !length) { onChapterSwipe?.(step, step < 0); return; }
+    if (!viewport || !content) return;
+    const stride = Math.max(1, viewport - Math.max(startPadding, 0) - endPadding - (textStyle.lineHeight ?? 24));
+    const next = Math.max(0, Math.min(content - viewport, scrollY.current + step * stride));
+    if (Math.abs(next - scrollY.current) <= 1) {
+      if (step > 0 ? end === chunks.length : start === 0) onChapterSwipe?.(step, step < 0);
+      return;
+    }
+    seeking.current = false;
+    moving.current = true;
+    onPageTurn?.(step);
+    scroll.current?.scrollTo({ y: next, animated: false });
+  }
   const pan = usePanGesture({
-    enabled: !!onChapterSwipe,
+    enabled: !!onChapterSwipe || paged,
     activeOffsetX: [-20, 20],
     failOffsetY: [-12, 12],
     maxPointers: 1,
     runOnJS: true,
     onDeactivate: ({ canceled, translationX, translationY }) => {
       if (!canceled && Math.abs(translationX) >= 56 && Math.abs(translationX) > 2 * Math.abs(translationY)) {
-        onChapterSwipe?.(translationX < 0 ? 1 : -1);
+        turn(translationX < 0 ? 1 : -1);
       }
     },
   });
@@ -187,7 +216,7 @@ export function ChunkedChapter({
     }
     const line = passageLine(frame, initialOffset, true);
     if (!line) return;
-    const y = line.y - (startPadding - 12);
+    const y = line.y - startPadding;
     scroll.current?.scrollTo({ y: Math.max(0, Math.min(y, content - viewport)), animated: false });
     seeking.current = false;
   }
@@ -206,6 +235,7 @@ export function ChunkedChapter({
   }
 
   function track(event: NativeScrollEvent) {
+    scrollY.current = Math.max(0, event.contentOffset.y);
     if (!moving.current || seeking.current || !chunks.length) return;
     const y = Math.max(0, event.contentOffset.y);
     if (Math.abs(y - lastY.current) < 0.5) return;
@@ -222,7 +252,11 @@ export function ChunkedChapter({
       end === chunks.length &&
       y > 0 &&
       y + event.layoutMeasurement.height >= event.contentSize.height - 1;
-    onMove(atEnd ? length : (line?.offset ?? chunks[visible].startOffset));
+    const offset = atEnd ? length : (line?.offset ?? chunks[visible].startOffset);
+    if (lastReported.current !== offset) {
+      lastReported.current = offset;
+      onMove(offset);
+    }
     // Keep the same native view visible while adding/removing siblings on either side.
     if ((visible <= start + 1 && start > 0) || (visible >= end - 2 && end < chunks.length)) {
       const next = Math.max(0, Math.min(maxStart, visible - 3));
@@ -239,11 +273,11 @@ export function ChunkedChapter({
   const content = (
     <Scroller
       ref={scroll}
-      {...(onChapterSwipe && { requireToFail: pan })}
+      {...((onChapterSwipe || paged) && { requireToFail: pan })}
       style={{ flex: 1 }}
       scrollEventThrottle={64}
       maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-      contentContainerStyle={{ paddingHorizontal: margin, paddingTop: start === 0 ? startPadding : 12, paddingBottom: end === chunks.length ? endPadding : 12 }}
+      contentContainerStyle={{ paddingTop: start === 0 ? startPadding : 0, paddingBottom: end === chunks.length ? endPadding : 0 }}
       onLayout={(e) => {
         dimensions.current.viewport = e.nativeEvent.layout.height;
         restore();
@@ -275,10 +309,12 @@ export function ChunkedChapter({
       {chunks.slice(start, end).map((chunk) => {
         const illustration = chunk.image;
         if (illustration && mediaDir) {
-          const picture = <Image accessibilityLabel={illustration.alt || 'Illustration'} accessible
+          const fullCover = chunk.chunkIndex === 0 && coverHeight;
+          const picture = fullCover ? <ReaderCover uri={mediaDir + '/' + illustration.file} label={illustration.alt || 'Book cover'}
+            height={fullCover} /> : <Image accessibilityLabel={illustration.alt || 'Illustration'} accessible
             source={{ uri: mediaDir + '/' + illustration.file }} contentFit="contain"
             style={{ width: '100%', height: Math.min(height * 0.75, (width - 2 * margin) / (illustration.aspect || 1.5)) }} />;
-          return <View key={chunk.chunkIndex} style={{ paddingVertical: 6 }}
+          return <View key={chunk.chunkIndex} style={{ marginHorizontal: fullCover ? 0 : margin, paddingVertical: fullCover ? 0 : 6 }}
             onLayout={(e) => updateFrame(chunk.chunkIndex, { top: e.nativeEvent.layout.y, lines: [{ offset: chunk.startOffset, y: 0 }] })}>
             {illustration.href ? <Pressable accessibilityRole="link" accessibilityLabel={illustration.alt || 'Linked illustration'}
               onPress={(e) => { e.stopPropagation(); onLink(illustration.href!); }}>{picture}</Pressable> : picture}
@@ -287,21 +323,29 @@ export function ChunkedChapter({
         const font = textStyle.fontSize ?? 17;
         const lineHeight = textStyle.lineHeight ?? font;
         return (
-          <View key={chunk.chunkIndex} collapsable={false}
+          <View key={chunk.chunkIndex} collapsable={false} style={{ marginHorizontal: margin }}
             onLayout={(e) => updateFrame(chunk.chunkIndex, { top: e.nativeEvent.layout.y })}>
             {visibleRows ? visibleRows[chunk.chunkIndex - start].map((row) => {
               const block = row.paragraph;
               const depth = block?.indent ?? 0;
+              const endsBlock = row.text.endsWith('\n') || row.startOffset + row.text.length === length;
+              if (block?.hidden) return <View key={row.startOffset} collapsable={false}
+                onLayout={(e) => updateRow(chunk.chunkIndex, row.startOffset, { top: e.nativeEvent.layout.y, lines: [{ offset: row.startOffset, y: 0 }] })} />;
               return (
                 <View key={row.startOffset} style={{
                   flexDirection: 'row', alignItems: 'flex-start',
                   marginStart: Math.min(width * 0.25, Math.max(0, depth - 1) * font * 1.5),
                   marginTop: row.first ? block.gap * font + block.blankLines * lineHeight : 0,
+                  width: block?.widthEm ? Math.min(width - 2 * margin, block.widthEm * font) : undefined,
+                  maxWidth: block?.maxWidthPercent != null ? `${block.maxWidthPercent}%` : '100%',
+                  alignSelf: block?.centerBlock && (block.widthEm || block.maxWidthPercent) ? 'center' : 'stretch',
+                  borderBottomColor: textStyle.color, borderBottomWidth: endsBlock ? block?.ruleBelow : 0,
+                  paddingBottom: endsBlock ? (block?.paddingBelow ?? 0) * font : 0,
                 }} onLayout={(e) => updateRow(chunk.chunkIndex, row.startOffset, { top: e.nativeEvent.layout.y })}>
                   {depth > 0 && <Text style={[textStyle, { minWidth: font * 1.3, marginEnd: font * 0.3, textAlign: 'right' }]}>
                     {row.first ? block.marker : undefined}
                   </Text>}
-                  <PassageText part={row} styles={publisherStyles} links={links} textStyle={textStyle} color={linkColor} onLink={onLink}
+                  <PassageText part={row} heading={block?.heading} styles={publisherStyles} links={links} textStyle={block?.align ? { ...textStyle, textAlign: block.align } : textStyle} color={linkColor} onLink={onLink}
                     onLines={(lines) => updateRow(chunk.chunkIndex, row.startOffset, { lines })} />
                 </View>
               );
@@ -316,7 +360,11 @@ export function ChunkedChapter({
   if (!onToggleControls) return content;
   return (
     <GestureDetector gesture={pan} touchAction="pan-y">
-      <Pressable accessible={false} style={{ flex: 1 }} onPress={onToggleControls}>
+      <Pressable accessible={false} style={{ flex: 1 }} onPress={event => {
+        const x = event.nativeEvent.pageX;
+        if (paged && (x < width / 3 || x > width * 2 / 3)) turn(x < width / 3 ? -1 : 1);
+        else onToggleControls();
+      }}>
         {content}
       </Pressable>
     </GestureDetector>

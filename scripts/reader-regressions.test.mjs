@@ -209,6 +209,54 @@ test('EPUB paragraph gaps, explicit blank lines and nested lists share stable so
   assert.equal(rows.map(row => row.text).join(''), text);
 });
 
+test('publisher child selectors style only matching paragraphs and list items', async () => {
+  const { extractChapterHtml } = await import('../src/formats/epub/chapterHtml.ts');
+  const source = '<style>.chapter > .verse p > em {font-weight:bold}' +
+    'ol.steps>li {list-style-type:upper-roman}</style>' +
+    '<section class="chapter"><div class="verse"><div class="verse"><p><em>Direct</em> ' +
+    '<span><em>nested</em></span></p></div></div></section>' +
+    '<ol class="steps"><li>Outer<ul><li>Inner</li></ul></li></ol>';
+  const { text, navigation } = extractChapterHtml(source);
+  assert.equal(text, 'Direct nested\nOuter\nInner');
+  const span = (label) => navigation.styles.find(({ start, end }) => text.slice(start, end) === label).style;
+  assert.deepEqual(span('Direct'), { bold: true, italic: true });
+  assert.deepEqual(span('nested'), { italic: true });
+  assert.deepEqual(navigation.paragraphs.map(p => p.marker), [undefined, 'I.', '◦']);
+});
+
+test('EPUB heading layout preserves publisher alignment, ornament and hidden navigation labels', async () => {
+  const { extractChapterHtml } = await import('../src/formats/epub/chapterHtml.ts');
+  const { text, navigation } = extractChapterHtml('<style>h2 { text-align:center; margin:1em auto; ' +
+    'font-size:150%; font-variant:small-caps; border-bottom:2px solid; width:15em; max-width:80%; padding-bottom:0.3em }' +
+    '.epub-invis { font-size:0 }</style><h1 class="epub-invis" id="anchor">TOC label</h1>' +
+    '<h2>The <em>crossing</em></h2><p>First paragraph.</p>');
+  assert.equal(text, 'TOC label\nThe crossing\nFirst paragraph.');
+  const [hidden, heading, body] = navigation.paragraphs;
+  assert.equal(hidden.hidden, true);
+  assert.deepEqual(navigation.anchors, [['anchor', 0]]);
+  assert.equal(heading.offset, text.indexOf('The crossing'));
+  assert.equal(heading.align, 'center');
+  assert.equal(heading.widthEm, 22.5);
+  assert.equal(heading.centerBlock, true);
+  assert.equal(heading.maxWidthPercent, 80);
+  assert.equal(heading.ruleBelow, 2);
+  assert.equal(body.heading, undefined);
+  const emphasis = navigation.styles.find(s => text.slice(s.start, s.end) === 'crossing').style;
+  assert.deepEqual(emphasis, { bold: true, scale: 1.5, smallCaps: true, italic: true });
+});
+
+test('nested EPUB block margins apply once at their first and last paragraphs', async () => {
+  const { extractChapterHtml } = await import('../src/formats/epub/chapterHtml.ts');
+  const source = '<p>Before</p><blockquote style="margin-top:2em"><div style="margin-top:1em">' +
+    '<p id="first">First</p><p>Second</p></div></blockquote>' +
+    '<ul style="margin-block: 3em 2em"><li>Item</li></ul><p><a href="#first">After</a></p>';
+  const { text, navigation } = extractChapterHtml(source);
+  assert.equal(text, 'Before\nFirst\nSecond\nItem\nAfter');
+  assert.deepEqual(navigation.paragraphs.map(p => p.gap), [0, 2, 0.6, 3, 2]);
+  assert.equal(navigation.anchors[0][1], text.indexOf('First'));
+  assert.equal(text.slice(navigation.links[0].start, navigation.links[0].end), 'After');
+});
+
 test('a long EPUB list keeps its numbering through chunk boundaries and renders bounded groups', async () => {
   const { extractChapterHtml } = await import('../src/formats/epub/chapterHtml.ts');
   const source = '<ol reversed>' + '<li>x</li>'.repeat(600) + '<li>' + 'y'.repeat(6400) + '</li></ol>';

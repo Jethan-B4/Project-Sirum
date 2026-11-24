@@ -11,6 +11,9 @@ export const SettingKeys = {
   // Reader (synced)
   readerPercentageMode: 'reader.percentageMode',
   readerStyle: 'reader.style',
+  readerNextButton: 'reader.nextChapterButton',
+  readerTransition: 'reader.transition',
+  readerTransitionSpeed: 'reader.transitionSpeed',
 
   // Library (synced)
   libraryOrderMode: 'library.orderMode',
@@ -103,6 +106,9 @@ export interface ReadingStyle {
 }
 
 export interface SettingValues {
+  [SettingKeys.readerNextButton]: boolean;
+  [SettingKeys.readerTransition]: 'fade' | 'slide' | 'none';
+  [SettingKeys.readerTransitionSpeed]: 'fast' | 'normal' | 'slow';
   [SettingKeys.readerPercentageMode]: PercentageMode;
   [SettingKeys.readerStyle]: ReadingStyle;
   [SettingKeys.libraryOrderMode]: LibraryOrderMode;
@@ -139,6 +145,9 @@ export const DEFAULT_READING_STYLE: ReadingStyle = {
 };
 
 export const SettingDefaults: SettingValues = {
+  [SettingKeys.readerNextButton]: true,
+  [SettingKeys.readerTransition]: 'fade',
+  [SettingKeys.readerTransitionSpeed]: 'normal',
   [SettingKeys.readerPercentageMode]: 'book',
   [SettingKeys.readerStyle]: DEFAULT_READING_STYLE,
   [SettingKeys.libraryOrderMode]: 'recent',

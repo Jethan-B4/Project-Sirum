@@ -5,10 +5,11 @@ import { extractChapterHtml } from './chapterHtml';
 import { cacheAsset, emptyAssets, isPublicationAsset, loadAssets, saveAssets } from './publicationAssets';
 import type { PublicationAssets } from './publisherStyle';
 import { packagePath, resolvePath } from './importEpub';
-import { presentationFile, type ChapterNavigation } from '../types';
+import { chapterFileStem, PRESENTATION_VERSION, presentationFile, type ChapterNavigation } from '../types';
 import type { ChapterRow } from '@/db/repositories/chapters';
 
-const rebuilding = new Map<string, Promise<void>>();
+type Rebuild = { done: Promise<void>; listeners: Set<(index: number) => void> };
+const rebuilding = new Map<string, Rebuild>();
 const preparingAssets = new Map<string, Promise<PublicationAssets>>();
 
 function cachePath(dir: string, index: number) {
@@ -39,7 +40,7 @@ export async function readSupplement(uri: string, path: string, dir: string) {
   return result;
 }
 
-async function rebuild(uri: string, dir: string, rows: ChapterRow[]) {
+async function rebuild(uri: string, dir: string, rows: ChapterRow[], published: (index: number) => void) {
   const assets = await assetsFor(uri, dir);
   let opf: string | undefined;
   await scanEntries(uri, (name) => name === 'META-INF/container.xml'
@@ -61,15 +62,16 @@ async function rebuild(uri: string, dir: string, rows: ChapterRow[]) {
       paths.delete(name);
       const image = assets.images.get(name);
       const { text, navigation } = image
-        ? { text: '', navigation: { presentationVersion: 2, links: [], anchors: [], images: [{ ...image, offset: 0, alt: '' }] } }
+        ? { text: '', navigation: { presentationVersion: PRESENTATION_VERSION, links: [], anchors: [], images: [{ ...image, offset: 0, alt: '' }] } }
         : extractChapterHtml(strFromU8(bytes), name, assets);
       for (const row of matching) {
         const file = cachePath(dir, row.chapter_index);
-        const stored = await FS.readAsStringAsync(file.replace('.presentation-v2.json', '.txt'));
-        if (text !== stored) continue;
         if ((await FS.getInfoAsync(file)).exists) continue;
+        const stored = await FS.readAsStringAsync(dir + '/' + chapterFileStem(row.chapter_index) + '.txt');
+        if (text !== stored) continue;
         await FS.writeAsStringAsync(file + '.tmp', JSON.stringify({ ...navigation, packageDir }));
         await FS.moveAsync({ from: file + '.tmp', to: file });
+        published(row.chapter_index);
       }
     };
   }, () => paths.size === 0);
@@ -77,22 +79,36 @@ async function rebuild(uri: string, dir: string, rows: ChapterRow[]) {
 
 export async function chapterNavigation(uri: string, dir: string, rows: ChapterRow[], index: number): Promise<ChapterNavigation> {
   const path = cachePath(dir, index);
-  const read = async () => JSON.parse(await FS.readAsStringAsync(path)) as ChapterNavigation;
+  const read = async (file = path) => JSON.parse(await FS.readAsStringAsync(file)) as ChapterNavigation;
   try {
     return await read();
   } catch {
     let work = rebuilding.get(dir);
     if (!work) {
-      work = rebuild(uri, dir, rows).finally(() => rebuilding.delete(dir));
+      const listeners: Rebuild['listeners'] = new Set();
+      const done = rebuild(uri, dir, rows, index => listeners.forEach(listener => listener(index)))
+        .finally(() => rebuilding.delete(dir));
+      work = { done, listeners };
       rebuilding.set(dir, work);
     }
+    // Open this chapter as soon as its atomic write finishes. Other chapters can keep rebuilding.
+    const { listeners, done } = work;
+    let notify!: (publishedIndex: number) => void;
+    const available = new Promise<void>(resolve => {
+      notify = publishedIndex => { if (publishedIndex === index) resolve(); };
+      listeners.add(notify);
+    });
     try {
-      await work;
+      await Promise.race([done, available]);
       return await read();
     } catch {
-      const old = path.replace('.presentation-v2.json', '.presentation.json');
-      const cached = await FS.readAsStringAsync(old).catch(() => FS.readAsStringAsync(old.replace('.presentation.json', '.links.json')));
-      return JSON.parse(cached) as ChapterNavigation;
+      const stem = dir + '/' + chapterFileStem(index);
+      return read(stem + '.presentation-v3.json')
+        .catch(() => read(stem + '.presentation-v2.json'))
+        .catch(() => read(stem + '.presentation.json'))
+        .catch(() => read(stem + '.links.json'));
+    } finally {
+      listeners.delete(notify);
     }
   }
 }

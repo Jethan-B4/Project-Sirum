@@ -1,5 +1,6 @@
 import * as htmlparser2 from 'htmlparser2';
 import { normalizeText } from '../../text/normalize.ts';
+import { PRESENTATION_VERSION } from '../types.ts';
 import type { ChapterImage, ChapterNavigation, ChapterParagraph, PublisherStyle } from '../types';
 import { chapterStyleRules, resourcePath, styledElement, type PublicationAssets } from './publisherStyle.ts';
 
@@ -145,13 +146,27 @@ export function extractChapterHtml(html: string, chapter = '', assets?: Publicat
   }
 
   function startBlock() {
-    const owner = elements.findLast((el) => BLOCK_TAGS.has(el.tag));
     const list = elements.findLast((el) => el.item)?.item;
     const indent = elements.filter((el) => el.tag === 'blockquote' || el.items).length;
-    currentBlock = { offset: 0, gap: Math.max(pendingGap, !owner?.started ? owner?.block.before ?? 0 : 0),
-      blankLines, indent };
+    let gap = pendingGap;
+    for (const el of elements) {
+      if (!el.started && (BLOCK_TAGS.has(el.tag) || el.items)) gap = Math.max(gap, el.block.before ?? 0);
+      el.started = true;
+    }
+    currentBlock = { offset: 0, gap, blankLines, indent };
+    const heading = elements.findLast(el => /^h[1-6]$/.test(el.tag) || el.attrs.role === 'heading');
+    if (heading) {
+      currentBlock.heading = true;
+      currentBlock.align = elements.findLast(el => el.block.align)?.block.align;
+      currentBlock.ruleBelow = heading.block.ruleBelow;
+      const scale = heading.style.scale ?? 1;
+      if (heading.block.widthEm != null) currentBlock.widthEm = heading.block.widthEm * scale;
+      currentBlock.maxWidthPercent = heading.block.maxWidthPercent;
+      currentBlock.centerBlock = heading.block.centerBlock;
+      if (heading.block.paddingBelow != null) currentBlock.paddingBelow = heading.block.paddingBelow * scale;
+      if (heading.style.scale === 0 || elements.some(el => el.block.hidden)) currentBlock.hidden = true;
+    }
     if (list && !list.paragraph) list.paragraph = currentBlock;
-    for (const el of elements) el.started = true;
     pendingGap = blankLines = 0;
     lastWasBreak = false;
   }
@@ -258,6 +273,7 @@ export function extractChapterHtml(html: string, chapter = '', assets?: Publicat
         if (ignoreDepth > 0) return;
         const element = elements.pop();
         if (element?.items) {
+          pendingGap = Math.max(pendingGap, element.block.after ?? 0);
           const reversed = 'reversed' in element.attrs;
           let n = integer(element.attrs.start) ?? (reversed ? element.items.length : 1);
           for (const item of element.items) {
@@ -306,7 +322,7 @@ export function extractChapterHtml(html: string, chapter = '', assets?: Publicat
   const joined = paragraphs.join('\n');
   const text = marks.length ? normalizeMarked(joined, marks) : normalizeText(joined);
   const navigation: ChapterNavigation = {
-    presentationVersion: 2,
+    presentationVersion: PRESENTATION_VERSION,
     paragraphs: layout,
     styles: styles.filter(({ start, end }) => end.offset > start.offset)
       .map(({ start, end, style }) => ({ start: start.offset, end: end.offset, style })),

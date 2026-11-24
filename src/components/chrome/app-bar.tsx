@@ -11,12 +11,14 @@ import { useAppTheme } from '@/theme/ThemeProvider';
 
 /** Top app bar (prototype `.bar`): optional leading control, title + count pill, actions. */
 export function AppBar({
+  compact = false,
   title,
   count,
   leading,
   actions,
   customAction,
 }: {
+  compact?: boolean;
   title: React.ReactNode;
   count?: number;
   leading?: 'menu' | 'back' | 'none';
@@ -28,7 +30,7 @@ export function AppBar({
   const showMenu = leading === 'menu';
 
   return (
-    <View className="flex-row items-center gap-1 pt-3 pb-2 px-3">
+    <View className={compact ? 'flex-row items-center gap-1 py-0.5 px-2' : 'flex-row items-center gap-1 pt-3 pb-2 px-3'}>
       {leading === 'back' && (
         <IconButton icon="arrow-back" label="Back" onPress={() => router.back()} />
       )}

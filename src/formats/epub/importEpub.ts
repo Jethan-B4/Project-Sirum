@@ -8,7 +8,7 @@ import { cacheAsset, emptyAssets, isPublicationAsset, saveAssets } from './publi
 import * as htmlparser2 from 'htmlparser2';
 
 import { NORMALIZATION_VERSION } from '@/text/normalize';
-import type { Chapter, ImportedBook } from '../types';
+import { PRESENTATION_VERSION, type Chapter, type ImportedBook } from '../types';
 
 interface EpubOpts {
   chaptersDir?: string;
@@ -414,7 +414,7 @@ export async function importEpub(uri: string, opts: EpubOpts): Promise<ImportedB
     const { text, firstHeading, navigation } = itemBytes
       ? extractChapterHtml(fflate.strFromU8(itemBytes), itemPath, assets)
       : { text: '', firstHeading: undefined, navigation: {
-          presentationVersion: 2 as const, links: [], anchors: [], images: [{ ...image!, offset: 0, alt: '' }],
+          presentationVersion: PRESENTATION_VERSION, links: [], anchors: [], images: [{ ...image!, offset: 0, alt: '' }],
         } };
 
     // Keep illustrated chapters even when they have no canonical text.

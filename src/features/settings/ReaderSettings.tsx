@@ -1,6 +1,6 @@
 import React from 'react';
 
-import { Section, SegmentedControl, SliderRow } from '@/components/ui/controls';
+import { Section, SectionLabel, SegmentedControl, SliderRow } from '@/components/ui/controls';
 import { ReadingStyleEditor, StylePreview } from '@/features/reader/ReadingStyleEditor';
 import { DEFAULT_READING_STYLE, normalizeStylePatch, SettingKeys } from '@/lib/settingsKeys';
 import { useSettings } from './SettingsProvider';
@@ -17,6 +17,18 @@ export default function ReaderSettings() {
 
   return (
     <SettingsPage title="Reader">
+      <Section title="Chapter navigation">
+        <SectionLabel>Next chapter button</SectionLabel>
+        <SegmentedControl options={[[true, 'Show'], [false, 'Hide']]} value={get(SettingKeys.readerNextButton)}
+          onChange={(value) => set(SettingKeys.readerNextButton, value)} />
+        <SectionLabel>Transition style</SectionLabel>
+        <SegmentedControl options={[['fade', 'Fade'], ['slide', 'Slide'], ['none', 'None']]} value={get(SettingKeys.readerTransition)}
+          onChange={(value) => set(SettingKeys.readerTransition, value)} />
+        <SectionLabel>Transition speed</SectionLabel>
+        <SegmentedControl options={[['fast', 'Fast'], ['normal', 'Normal'], ['slow', 'Slow']]}
+          disabled={get(SettingKeys.readerTransition) === 'none'} value={get(SettingKeys.readerTransitionSpeed)}
+          onChange={(value) => set(SettingKeys.readerTransitionSpeed, value)} />
+      </Section>
       <Section
         title="Progress display"
         description="Show progress for the whole book or the current chapter.">

@@ -39,7 +39,7 @@ Implementation tracking lives in `development-progress.md`. Compared with this p
 - **Adaptive interface.** Library categories show labels and counts, including zero, in both themes. The grid responds to viewport width and text scale. Portrait and landscape layouts use safe-area insets. History supports a local title, author and chapter search alongside its own filters and ordering.
 - **Links in the reader.** EPUB labels retain their link ranges and target anchors in normalized chapter text. TXT web addresses are also actionable. Tapping a blue link shows its destination and requires confirmation before opening an external address or moving within the book. Linked EPUB footnotes outside the chapter sequence open separately.
 - **Release checks.** Run `npm run check:package-size -- <package-path>` on each production binary. The production EAS success hook runs the same check. Exercise a 500+ page book in a release build on a lower-end phone, including continuous scrolling, chapter jumps, search and rotation. Record frame timing and memory alongside release package size.
-- **Remaining work:** Device performance measurements, paged flow, highlight and note creation, PDF extraction, reactive repository reads, Google sign-in and sync. The Supabase SQL still needs live verification.
+- **Remaining work:** Device performance measurements, line-aligned page boundaries, highlight and note creation, PDF extraction, reactive repository reads, Google sign-in and sync. The Supabase SQL still needs live verification.
 
 ---
 
@@ -642,7 +642,7 @@ documentDirectory/books/{documentId}/
   original.epub
   chapters/0000.txt
   chapters/0001.txt
-  chapters/0000.presentation-v2.json
+  chapters/0000.presentation-v4.json
   chapters/publication-assets.json
   chapters/media-0.png
   cover.jpg
@@ -711,16 +711,18 @@ Rendering a whole chapter, let alone a whole book, as one `<Text>` will freeze o
 
 ### 5.6.1 Reader screen layout and features
 
-Reference prototype: `sirum-reader-prototype.html`. The scrolled reader now renders a bounded window of chunks around the current passage.
+The local reader prototype and Android reference captures are in `local/`. See the reference inventory in `development-progress.md`. Both reading flows render a bounded window of chunks around the current passage.
 
 - **Top bar:** back, book title, in-book search, display (Aa), and an overflow menu with **Add bookmark**, **Contents**, and **Settings**.
 - **Bottom bar:** current chapter title, a percentage, and a scrubber. The percentage and scrubber follow `reader.percentageMode` (5.8).
-- The scrolled reader opens with both bars visible. A tap on the passage toggles them, and starting a vertical scroll hides them. Position both bars absolutely above the scroll viewport. Reserve their measured heights only at the beginning and end of the chapter. Showing or hiding either bar must preserve the visible passage and its line wrapping. Screen-reader users retain access to the bars.
+- Open the reader with the controls tucked away. Tapping the passage shows compact controls over the existing viewport. A vertical drag hides them. Keep controls accessible to screen readers and respect system safe areas.
+- Give the opening cover a full viewport in either orientation. Contain the artwork and fill the surrounding space with a dimmed, blurred copy. The first chapter or contents begins after the cover. Use the EPUB's own headings in the passage and its navigation label in the footer.
+- Reader settings persist the Next chapter button preference and the Fade, Slide or None transition with Fast, Normal or Slow timing. Honor system Reduce Motion. Keep the previous passage visible until the destination chapter is ready.
 - **Aa** and **More** open below the toolbar at its trailing edge. Keep the display title and close action visible, group settings into Text, Colors and Layout, and allow the controls to scroll on short screens.
-- A horizontal swipe across the passage opens the next chapter when swiping left and the previous chapter when swiping right. Open the destination at its start, preserve the existing progress-saving behavior, and stop at the first and last chapters. Keep the scrubber, links, and display controls independently interactive.
+- In scrolled flow, a horizontal swipe across the passage opens the next chapter when swiping left and the previous chapter when swiping right. Open the destination at its start, preserve the existing progress-saving behavior, and stop at the first and last chapters. Keep the scrubber, links, and display controls independently interactive.
 - **Contents panel** (opens from the right, three tabs): **Contents** (chapter list from `document_chapters`, current chapter highlighted, tap to jump), **Annotations** (highlights and notes), and **Bookmarks** (chapter and percent, tap to jump).
 - **Display popup** (from Aa):
-  - **Flow:** Auto, Paged, or Scrolled. Scrolled is v1. Paged paginates lazily around the current position, with tap zones on the left and right thirds. Auto picks paged on wide screens and scrolled on phones.
+  - **Flow:** Auto, Paged, or Scrolled. Paged moves by a viewport with a line of overlap. Tap the outer thirds or swipe horizontally to turn and tap the center for controls. Auto enables these turns at widths of 700 logical pixels or more.
   - **Brightness:** `expo-brightness` or a dimming overlay, stored as `device.readerBrightness`; restore the system value on exit.
   - **Theme:** swatches (white, dark gray, black, sepia) plus custom background and text colors.
   - **Text size** (percent), **text align** (left or justify), and **margin** (percent of width), each with minus and plus controls.
@@ -1395,7 +1397,7 @@ Collect real files covering: EPUB 2 and EPUB 3; nested TOC; no TOC; TOC pointing
 | **M2** | Local data layer | 🟡 Partial | Migrations and repositories done. Reactive reads are minimal and there are no unit tests yet. |
 | **M3** | Text model and TXT slice | ✅ Done | Add position-math and normalization tests. |
 | **M4** | **EPUB reader (primary)** | 🟢 Advanced | Import, covers, TOC, library, settings, per-book style, and progress are done. Windowed rendering, import recovery and legacy cover repair implemented. Device profiling and extraction golden files remain. |
-| **M4b** | **Reader screen parity** | Partial | Contents panel, display popup, incremental search and scrubber implemented. Paged flow remains. |
+| **M4b** | **Reader screen parity** | Partial | Contents panel, display popup, incremental search and scrubber implemented. Viewport page turns are implemented. Exact line-aligned pagination remains open. |
 | **M5** | PDF and annotations | ⬜ Not started | pdf.js extraction spike; highlight and note UI and storage. |
 | **M6** | Backend | 🟡 Partial | SQL is written. Verify RLS, triggers, and the cross-user test against the live project. |
 | **M7** | Google sign-in | ⬜ Not started | EAS development build, sign in and out, optional-auth flows. |

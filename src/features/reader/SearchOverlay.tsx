@@ -1,5 +1,6 @@
+import { ReaderOverlay } from './ReaderOverlay';
 import React, { useEffect, useState } from 'react';
-import { FlatList, Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { FlatList, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAppTheme } from '@/theme/ThemeProvider';
@@ -72,10 +73,8 @@ export function SearchOverlay({
     if (q) onAddHistory(q);
   };
 
-  if (!visible) return null;
   return (
-    <Modal
-      supportedOrientations={['portrait', 'landscape']} visible={visible} animationType="slide" onRequestClose={onClose}>
+    <ReaderOverlay visible={visible} onClose={onClose}>
       <View className="flex-1 bg-surface" style={{ paddingTop: insets.top }}>
         {/* Search bar */}
         <View className="flex-row items-center gap-1 px-2 pt-2 pb-2">
@@ -157,6 +156,6 @@ export function SearchOverlay({
           />
         )}
       </View>
-    </Modal>
+    </ReaderOverlay>
   );
 }

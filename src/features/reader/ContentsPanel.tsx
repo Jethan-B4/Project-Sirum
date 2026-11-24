@@ -1,5 +1,6 @@
+import { ReaderOverlay } from './ReaderOverlay';
 import React, { useEffect, useState } from 'react';
-import { Modal, FlatList, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
+import { FlatList, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAppTheme } from '@/theme/ThemeProvider';
@@ -81,7 +82,6 @@ export function ContentsPanel({
     return () => { cancelled = true; };
   }, [chapters, highlights, readChapter, tab, visible]);
 
-  if (!visible) return null;
   const chapterTitle = (index: number) =>
     chapters[index]?.title ?? `Chapter ${index + 1}`;
 
@@ -91,8 +91,7 @@ export function ContentsPanel({
       : undefined;
 
   return (
-    <Modal
-      supportedOrientations={['portrait', 'landscape']} visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <ReaderOverlay visible={visible} onClose={onClose}>
       <View className="flex-1 flex-row justify-end">
         <Pressable className="absolute inset-0 bg-black/55" onPress={onClose} />
         <View
@@ -226,6 +225,6 @@ export function ContentsPanel({
           </ScrollView>)}
         </View>
       </View>
-    </Modal>
+    </ReaderOverlay>
   );
 }

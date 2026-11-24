@@ -4,11 +4,13 @@ export interface BookLink {
   href: string;
 }
 
+export const PRESENTATION_VERSION = 4 as const;
+
 export interface ChapterNavigation {
   packageDir?: string;
   links: BookLink[];
   anchors: [string, number][];
-  presentationVersion?: 1 | 2;
+  presentationVersion?: 1 | 2 | 3 | typeof PRESENTATION_VERSION;
   paragraphs?: ChapterParagraph[];
   styles?: { start: number; end: number; style: PublisherStyle }[];
   images?: ChapterImage[];
@@ -21,10 +23,22 @@ export interface ChapterParagraph {
   blankLines: number;
   indent: number; // list and quotation nesting depth
   marker?: string;
+  heading?: boolean;
+  align?: 'left' | 'center' | 'right' | 'justify';
+  ruleBelow?: number;
+  widthEm?: number;
+  maxWidthPercent?: number;
+  centerBlock?: boolean;
+  paddingBelow?: number;
+  hidden?: boolean;
+}
+
+export function chapterFileStem(index: number) {
+  return String(index).padStart(4, '0');
 }
 
 export function presentationFile(index: number) {
-  return String(index).padStart(4, '0') + '.presentation-v2.json';
+  return chapterFileStem(index) + `.presentation-v${PRESENTATION_VERSION}.json`;
 }
 
 export interface PublisherStyle {
@@ -33,6 +47,7 @@ export interface PublisherStyle {
   underline?: boolean;
   strike?: boolean;
   scale?: number;
+  smallCaps?: boolean;
 }
 
 export interface ChapterImage {
