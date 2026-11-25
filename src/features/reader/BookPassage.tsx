@@ -8,6 +8,8 @@ import type { ChapterNavigation } from '@/formats/types';
 import { linkColor } from '@/lib/color';
 import { chunkChapter, plainParagraphs } from '@/text/chunk';
 import { plainLinks, linksInRange } from '@/text/links';
+import type { HighlightRow } from '@/db/repositories/highlights';
+import type { SelectionAnchor } from './textSelection';
 
 export type LoadedChapter = { index: number; text: string; nav: ChapterNavigation | null };
 type PassageProps = Pick<React.ComponentProps<typeof ChunkedChapter>, 'initialOffset' | 'onMove' | 'onToggleControls'
@@ -15,9 +17,12 @@ type PassageProps = Pick<React.ComponentProps<typeof ChunkedChapter>, 'initialOf
   | 'safeTop' | 'safeBottom' | 'margin' | 'mediaDir' | 'startPadding' | 'endPadding'> & {
     page: LoadedChapter; style: ReadingStyle; viewportHeight: number; coverUri?: string | null;
     bookTitle: string; fallbackTitle?: string | null;
+      highlights?: (Pick<HighlightRow, 'id' | 'start_offset' | 'end_offset' | 'color' | 'note'>)[];
+      onSelectText?: (offset: number, anchor: SelectionAnchor) => void;
+      onSelectHighlight?: (id: string, anchor: SelectionAnchor) => void;
   };
 
-export function BookPassage({ page, style, viewportHeight, coverUri, bookTitle, fallbackTitle, ...reader }: PassageProps) {
+export function BookPassage({ page, style, viewportHeight, coverUri, bookTitle, fallbackTitle, highlights, onSelectText, onSelectHighlight, ...reader }: PassageProps) {
   const { text, index, nav } = page;
   const paragraphs = useMemo(() => nav?.paragraphs?.length ? nav.paragraphs :
     style.indentParagraphs ? plainParagraphs(text) : undefined, [nav, style.indentParagraphs, text]);
@@ -33,6 +38,7 @@ export function BookPassage({ page, style, viewportHeight, coverUri, bookTitle, 
   const fontFamily = readingFontFamily(style.fam);
   return <ChunkedChapter {...reader} chunks={chunks} linkText={text} length={text.length} links={links} linkColor={linkColor(style.bg)}
     coverHeight={embeddedCover ? viewportHeight : undefined} paragraphs={paragraphs} publisherStyles={nav?.styles}
+    highlights={highlights} onSelectText={onSelectText} onSelectHighlight={onSelectHighlight}
     indent={style.indentParagraphs ? style.indentLength : 0} textStyle={{ color: style.tx, fontFamily, fontSize,
       fontWeight: String(style.wt) as '400', lineHeight: Math.round(fontSize * style.lh), textAlign: style.align }}>
     {index === 0 && !embeddedCover && coverUri && <ReaderCover uri={coverUri} label={bookTitle + ' cover'} height={viewportHeight} />}

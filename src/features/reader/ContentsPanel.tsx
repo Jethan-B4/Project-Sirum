@@ -1,6 +1,6 @@
 import { ReaderOverlay } from './ReaderOverlay';
 import React, { useEffect, useState } from 'react';
-import { FlatList, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
+import { FlatList, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAppTheme } from '@/theme/ThemeProvider';
@@ -10,6 +10,7 @@ import { pressFeedback } from '@/components/ui/press-feedback';
 import type { BookmarkRow } from '@/db/repositories/bookmarks';
 import type { HighlightRow } from '@/db/repositories/highlights';
 import type { ReaderChapter } from './types';
+import { decodeHighlightStyle } from './textSelection';
 
 type Tab = 'toc' | 'ann' | 'bm';
 
@@ -35,6 +36,7 @@ export function ContentsPanel({
   onJumpOffset,
   onDeleteBookmark,
   onDeleteHighlight,
+  onUpdateHighlightNote,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -49,12 +51,16 @@ export function ContentsPanel({
   onJumpOffset(offset: number): void;
   onDeleteBookmark(id: string): void;
   onDeleteHighlight(id: string): void;
+  onUpdateHighlightNote(id: string, note: string): void;
 }) {
   const insets = useSafeAreaInsets();
   const { accent } = useAppTheme();
   const { fontScale } = useWindowDimensions();
   const rowHeight = Math.max(52, Math.ceil(42 * fontScale + 12));
   const [tab, setTab] = useState<Tab>('toc');
+  const [menuId, setMenuId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState('');
 
   const [snippets, setSnippets] = useState<Record<string, string>>({});
   useEffect(() => {
@@ -74,8 +80,9 @@ export function ContentsPanel({
         if (!row) continue;
         const text = await readChapter(row.chapter_index).catch(() => '');
         for (const highlight of group) {
-          const offset = highlight.start_offset - row.start_offset;
-          next[highlight.id] = text.slice(Math.max(0, offset - 40), offset + 60).trim();
+          const start = Math.max(0, highlight.start_offset - row.start_offset);
+          const end = Math.max(start, highlight.end_offset - row.start_offset);
+          next[highlight.id] = text.slice(start, end).trim();
         }
       }
       if (!cancelled) setSnippets(next);
@@ -153,38 +160,85 @@ export function ContentsPanel({
               ) : (
                 highlights.map((h) => {
                   const snippet = snippets[h.id];
+                  const color = decodeHighlightStyle(h.color).color;
                   return (
-                    <View key={h.id} className="px-6 py-3.5">
-                      <Pressable
-                        className={`flex-row items-start gap-3 ${pressFeedback}`}
-                        onPress={() => {
-                          onClose();
-                          onJumpOffset(h.start_offset);
-                        }}>
-                        <Icon name="color-fill" size={18} tone="muted" />
-                        <View className="flex-1 min-w-0">
-                          {!!snippet && (
-                            <Text numberOfLines={3} className="font-ui text-tx text-[14px]">
-                              {snippet}
+                    <View key={h.id} className="px-6 py-3.5 border-b border-line">
+                      <View className="flex-row items-start gap-2">
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="Open highlighted passage"
+                          className={`flex-1 flex-row items-start gap-3 ${pressFeedback}`}
+                          onPress={() => {
+                            onClose();
+                            onJumpOffset(h.start_offset);
+                          }}>
+                          <View className="mt-1 h-5 w-5 rounded-full border border-line"
+                            style={{ backgroundColor: color ?? 'transparent' }}>
+                            {!color && <Icon name="color-fill" size={15} tone="muted" />}
+                          </View>
+                          <View className="flex-1 min-w-0">
+                            <Text className="font-ui text-mu text-[11px] font-semibold tracking-wider">
+                              HIGHLIGHTED TEXT
                             </Text>
-                          )}
-                          {!!h.note && (
-                            <Text numberOfLines={2} className="font-ui text-mu text-[13px] mt-1">
-                              {h.note}
+                            <Text numberOfLines={5} className="font-ui text-tx text-[14px] mt-1">
+                              {snippet || 'Selected text unavailable'}
                             </Text>
+                            {!!h.note && (
+                              <View className="mt-2 border-l-2 border-line pl-2">
+                                <Text className="font-ui text-mu text-[11px] font-semibold tracking-wider">YOUR NOTE</Text>
+                                <Text numberOfLines={4} className="font-ui text-tx text-[14px] mt-1">{h.note}</Text>
+                              </View>
+                            )}
+                            <Text className="font-ui text-mu text-[12px] mt-2">
+                              {chapterTitle(h.chapter_index)}
+                            </Text>
+                          </View>
+                        </Pressable>
+                        <View>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Highlight options"
+                            accessibilityState={{ expanded: menuId === h.id }}
+                            onPress={() => setMenuId(menuId === h.id ? null : h.id)}
+                            className={`p-1 ${pressFeedback}`}>
+                            <Icon name="ellipsis-vertical" size={18} tone="muted" />
+                          </Pressable>
+                          {menuId === h.id && (
+                            <View className="absolute top-9 right-0 z-10 rounded-lg border border-line bg-surface px-2 py-1 shadow">
+                              <Pressable accessibilityRole="button" onPress={() => {
+                                setNoteDraft(h.note ?? '');
+                                setEditingId(h.id);
+                                setMenuId(null);
+                              }} className={`px-3 py-2 ${pressFeedback}`}>
+                                <Text className="font-ui text-tx text-[13px]">{h.note ? 'Edit note' : 'Add note'}</Text>
+                              </Pressable>
+                              <Pressable accessibilityRole="button" onPress={() => {
+                                onDeleteHighlight(h.id);
+                                setMenuId(null);
+                              }} className={`px-3 py-2 ${pressFeedback}`}>
+                                <Text className="font-ui text-tx text-[13px]">Delete highlight</Text>
+                              </Pressable>
+                            </View>
                           )}
-                          <Text className="font-ui text-mu text-[12px] mt-1">
-                            {chapterTitle(h.chapter_index)}
-                          </Text>
                         </View>
-                      </Pressable>
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel="Delete highlight"
-                        onPress={() => onDeleteHighlight(h.id)}
-                        className={`absolute top-3 right-4 p-1 ${pressFeedback}`}>
-                        <Icon name="trash-outline" size={16} tone="muted" />
-                      </Pressable>
+                      </View>
+                      {editingId === h.id && (
+                        <View className="mt-2">
+                          <TextInput value={noteDraft} onChangeText={setNoteDraft} multiline
+                            placeholder="Add a note" className="font-ui text-tx text-[14px] rounded-lg border border-line bg-surface px-3 py-2" />
+                          <View className="flex-row justify-end gap-3 mt-2">
+                            <Pressable accessibilityRole="button" onPress={() => setEditingId(null)} className={`px-2 py-1 ${pressFeedback}`}>
+                              <Text className="font-ui text-mu text-[13px]">Cancel</Text>
+                            </Pressable>
+                            <Pressable accessibilityRole="button" onPress={() => {
+                              onUpdateHighlightNote(h.id, noteDraft.trim());
+                              setEditingId(null);
+                            }} className={`px-2 py-1 ${pressFeedback}`}>
+                              <Text className="font-ui text-[13px]" style={{ color: accent.hex }}>Save note</Text>
+                            </Pressable>
+                          </View>
+                        </View>
+                      )}
                     </View>
                   );
                 })

@@ -1,4 +1,5 @@
 import { getDb } from '../client';
+import { uuid } from '../../lib/uuid';
 
 export interface HighlightRow {
   id: string;
@@ -25,6 +26,44 @@ export const highlights = {
        ORDER BY start_offset ASC`,
       [documentId]
     );
+  },
+
+  async create(input: Pick<HighlightRow, 'document_id' | 'start_offset' | 'end_offset' | 'chapter_index' | 'color' | 'note'>): Promise<string> {
+    if (!input.color?.trim() || input.color === 'u:') {
+      throw new Error('Highlights require a color.');
+    }
+    const db = await getDb();
+    const now = new Date().toISOString();
+    const id = uuid();
+    await db.runAsync(
+      `INSERT INTO highlights (
+        id, document_id, start_offset, end_offset, chapter_index, color, note,
+        created_at, updated_at, deleted_at, dirty, server_updated_at, sync_error
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, NULL, NULL)`,
+      [id, input.document_id, input.start_offset, input.end_offset, input.chapter_index,
+        input.color, input.note, now, now]
+    );
+    return id;
+  },
+
+  async update(id: string, patch: Partial<Pick<HighlightRow, 'color' | 'note'>>): Promise<void> {
+    const db = await getDb();
+    const now = new Date().toISOString();
+    const setClauses = ['updated_at = ?', 'dirty = 1'];
+    const params: (string | null)[] = [now];
+    if ('color' in patch) {
+      if (!patch.color?.trim() || patch.color === 'u:') {
+        throw new Error('Highlights require a color.');
+      }
+      setClauses.push('color = ?');
+      params.push(patch.color);
+    }
+    if ('note' in patch) {
+      setClauses.push('note = ?');
+      params.push(patch.note ?? null);
+    }
+    params.push(id);
+    await db.runAsync(`UPDATE highlights SET ${setClauses.join(', ')} WHERE id = ?`, params);
   },
 
   async softDelete(id: string): Promise<void> {

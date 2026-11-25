@@ -29,18 +29,18 @@
 
 ---
 
-## Current Status (2026-11-23)
+## Current Status (2026-11-25)
 
 Implementation tracking lives in `development-progress.md`. Compared with this plan, the project is further along in Phase 3 and has some differences:
 
-- **Built and working:** TXT and EPUB import and reading, library (grid/list, filters, order modes), history, import (manual picker and Android folder scan), the categorized settings hub, app themes and fonts, per-book reading style, ask-once prompts, progress save and restore, and the reader screen with the Aa sheet.
+- **Built and working:** TXT and EPUB import and reading, library (grid/list, filters, order modes), history, import (manual picker and Android folder scan), the categorized settings hub, app themes and fonts, per-book reading style, ask-once prompts, progress save and restore, and the reader screen with the Aa sheet and text annotations.
 - **Differences from the plan:** styling uses NativeWind v4 with CSS-variable theme tokens; routes live in `src/app/`, shared UI in `src/components/`, theming in `src/theme/`, and settings in `src/features/settings/` (see 3.2). Import stages files through a multi-strategy helper (5.1).
 - **Reader and import updates:** Contents, bookmarks, in-book search, cover normalization and import reports are implemented. Books open at the selected chapter and render a moving window of text chunks. Interrupted imports can be retried, and repeat imports can repair a legacy cover.
 - **Adaptive interface.** Library categories show labels and counts, including zero, in both themes. The grid responds to viewport width and text scale. Portrait and landscape layouts use safe-area insets. History supports a local title, author and chapter search alongside its own filters and ordering.
 - **Links in the reader.** EPUB labels retain their link ranges and target anchors in normalized chapter text. TXT web addresses are also actionable. Tapping a link opens a themed preview of its complete linked passage (or external address), with explicit choices to continue reading, open the link, or navigate to the passage. Linked EPUB footnotes outside the chapter sequence open separately.
 - **Navigation responsiveness.** Adjacent chapters are preloaded for faster swipes and chapter jumps. Standard stack navigation does not animate through an intermediate screen, avoiding the previous transition flash. Shared app controls provide consistent pressed-state feedback.
 - **Release checks.** Run `npm run check:package-size -- <package-path>` on each production binary. The production EAS success hook runs the same check. Exercise a 500+ page book in a release build on a lower-end phone, including continuous scrolling, chapter jumps, search and rotation. Record frame timing and memory alongside release package size.
-- **Remaining work:** Device performance measurements, line-aligned page boundaries, highlight and note creation, PDF extraction, reactive repository reads, Google sign-in and sync. The Supabase SQL still needs live verification.
+- **Remaining work:** Device performance measurements, line-aligned page boundaries, PDF extraction, reactive repository reads, Google sign-in and sync. The Supabase SQL still needs live verification.
 
 ---
 
@@ -724,6 +724,7 @@ The local reader prototype and Android reference captures are in `local/`. See t
 - **Aa** and **More** open below the toolbar at its trailing edge. Keep the display title and close action visible, group settings into Text, Colors and Layout, and allow the controls to scroll on short screens.
 - In scrolled flow, a horizontal swipe across the passage opens the next chapter when swiping left and the previous chapter when swiping right. Open the destination at its start, preserve the existing progress-saving behavior, and stop at the first and last chapters. Keep the scrubber, links, and display controls independently interactive.
 - **Contents panel** (opens from the right, three tabs): **Contents** (chapter list from `document_chapters`, current chapter highlighted, tap to jump), **Annotations** (highlights and notes), and **Bookmarks** (chapter and percent, tap to jump).
+- **Text selection and annotations:** Keep native selectable passage text and its platform actions; add a compact reader toolbar for Select All (current chapter), Copy, Share, online Search, and More/device-app actions. Tapping saved text reopens its actions. The toolbar offers pastel highlight colors, an X to remove a saved highlight, underline, and a note field. Persist notes only with a colored highlight, keep offsets in normalized UTF-16 book text, and show the full excerpt, chapter, color, and separately labeled note in Annotations.
 - **Display popup** (from Aa):
   - **Flow:** Auto, Paged, or Scrolled. Paged moves by a viewport with a line of overlap. When edge taps are enabled, the left and right thirds turn backward and forward in the current flow. When disabled, taps toggle controls and swipes still turn. Auto selects paged flow at widths of 700 logical pixels or more.
   - Single-chapter books, including TXT, use viewport turns in either flow.
@@ -888,7 +889,9 @@ Keys that start with `device.` are device-local: a phone and a tablet may want d
 ### 5.11 Bookmarks, highlights, notes
 - Bookmark: store `char_offset`, `chapter_index`, `chapter_char_offset`, and a snippet.
 - Highlight: store global start/end offsets and `chapter_index`; render by splitting chunk text into styled spans. Shows the highlighted text by slicing the local normalized text.
-- Notes attach to a highlight or bookmark.
+- Text selection: use native long-press selection affordances; offer current-chapter Select All, Copy, Share, online Search, and a More menu for external/device-app actions. Keep links, reader gestures, and stored normalized offsets intact.
+- Highlight styling: save the chosen color and optional underline with the existing highlight record; the X deletes the highlight rather than saving a colorless row.
+- Notes attach to a colored highlight or bookmark. Keep the selection toolbar close to the passage without truncating its excerpt; the Annotations view labels the exact highlighted excerpt and optional note separately and offers note editing and deletion.
 - Because offsets are against normalized text, they stay stable across font changes. A bookmark list can group by chapter using the chapter title.
 
 ### 5.12 Accessibility and UX details

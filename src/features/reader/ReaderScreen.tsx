@@ -5,7 +5,7 @@ import { createChapterCache } from './chapterCache';
 import type { Direction } from './useSwipeTurn';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { AccessibilityInfo, Animated, Easing, Linking, AppState, Pressable, Text, View, useWindowDimensions } from 'react-native';
+import { AccessibilityInfo, Animated, Easing, Linking, AppState, Pressable, Share, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -20,6 +20,7 @@ import { bookmarks as bookmarksRepo } from '@/db/repositories/bookmarks';
 import { chapters as chaptersRepo } from '@/db/repositories/chapters';
 import { documents } from '@/db/repositories/documents';
 import { highlights as highlightsRepo } from '@/db/repositories/highlights';
+import * as Clipboard from 'expo-clipboard';
 import { progress as progressRepo } from '@/db/repositories/progress';
 import { useSettings } from '@/features/settings/SettingsProvider';
 import {
@@ -43,6 +44,8 @@ import { ReaderOptionsPopup } from './ReaderOptionsPopup';
 import { DisplayPopup } from './DisplayPopup';
 import { readingFontFamily, BASE_FONT_SIZE } from './ReadingStyleEditor';
 import { resumePosition } from './resume';
+import { ReaderSelectionPopup, type SelectionAction } from './ReaderSelectionPopup';
+import { characterRangeAt, decodeHighlightStyle, encodeHighlightStyle, wordRangeAt, type SelectionAnchor } from './textSelection';
 import { SearchOverlay } from './SearchOverlay';
 import type { ReaderChapter, SearchResult } from './types';
 import type { BookmarkRow } from '@/db/repositories/bookmarks';
@@ -61,6 +64,17 @@ type LinkPopupState = {
   section?: Awaited<ReturnType<typeof readSupplement>>;
   loading: boolean;
   error?: string;
+};
+type ReaderSelection = {
+  chapterIndex: number;
+  startOffset: number;
+  endOffset: number;
+  anchor: SelectionAnchor;
+  text: string;
+  highlightId?: string;
+  color: string | null;
+  underline: boolean;
+  note: string;
 };
 
 export default function ReaderScreen() {
@@ -120,6 +134,7 @@ function BookReader({ id }: { id: string }) {
   const [scrub, setScrub] = useState<number | null>(null);
   const [bms, setBms] = useState<BookmarkRow[]>([]);
   const [hls, setHls] = useState<HighlightRow[]>([]);
+  const [selection, setSelection] = useState<ReaderSelection | null>(null);
   const [pmDismissed, setPmDismissed] = useState(false);
 
   // Display-popup scope: 'all' edits the synced default, 'book' a per-book override.
@@ -283,6 +298,7 @@ function BookReader({ id }: { id: string }) {
     recordPosition(index, offset);
     setControlsVisible(false);
     setLoadError(null);
+    setSelection(null);
     setChIdx(index);
     setNavigationRevision((revision) => revision + 1);
   }, [chs, chIdx, loaded, loadChapter, recordPosition, toast]);
@@ -409,6 +425,54 @@ function BookReader({ id }: { id: string }) {
     if (doc) setHls(await highlightsRepo.list(doc.id).catch(() => []));
   }, [doc]);
 
+  const updateHighlightNote = useCallback(async (hid: string, note: string) => {
+    try {
+      await highlightsRepo.update(hid, { note: note.trim() || null });
+      if (doc) setHls(await highlightsRepo.list(doc.id));
+    } catch {
+      toast('Note could not be saved');
+    }
+  }, [doc, toast]);
+
+  const removeSelectionHighlight = useCallback(async (hid: string) => {
+    try {
+      await highlightsRepo.softDelete(hid);
+      if (doc) setHls(await highlightsRepo.list(doc.id));
+      setSelection(null);
+    } catch {
+      toast('Highlight could not be removed');
+    }
+  }, [doc, toast]);
+
+  const saveSelection = useCallback(async (color: string | null, underline: boolean, note: string) => {
+    if (!doc || !selection) return;
+    if (!color) {
+      if (note.trim()) toast('Choose a highlight color before saving a note');
+      return;
+    }
+    const storedColor = encodeHighlightStyle({ color, underline });
+    const storedNote = note.trim() || null;
+    try {
+      let id = selection.highlightId;
+      if (id) {
+        await highlightsRepo.update(id, { color: storedColor, note: storedNote });
+      } else {
+        id = await highlightsRepo.create({
+          document_id: doc.id,
+          start_offset: selection.startOffset,
+          end_offset: selection.endOffset,
+          chapter_index: selection.chapterIndex,
+          color: storedColor,
+          note: storedNote,
+        });
+      }
+      setHls(await highlightsRepo.list(doc.id));
+      setSelection(current => current ? { ...current, highlightId: id, color, underline, note: storedNote ?? '' } : current);
+    } catch {
+      toast('Highlight could not be saved');
+    }
+  }, [doc, selection, toast]);
+
   // --- Display popup ---------------------------------------------------------------
   const applyStyle = useCallback(
     (patch: Partial<ReadingStyle>) => {
@@ -511,12 +575,95 @@ function BookReader({ id }: { id: string }) {
   // Edge taps can step by viewport. Horizontal drags always target an adjacent chapter.
   const turnByViewport = !screenReader && (chs.length === 1 || style.flow === 'paged' || (style.flow === 'auto' && winWidth >= 700));
   function hideReaderControls() { setOverlay('none'); setControlsVisible(false); }
+  const openTextSelection = useCallback((page: LoadedChapter, offset: number, anchor: SelectionAnchor, highlightId?: string) => {
+    if (page.index !== chIdx) return;
+    const chapter = chs[page.index];
+    if (!chapter) return;
+    const absoluteOffset = chapter.start_offset + Math.max(0, Math.min(page.text.length, offset));
+    const existing = (highlightId ? hls.find(highlight => highlight.id === highlightId) : undefined) ??
+      hls.find(highlight => highlight.chapter_index === page.index &&
+        highlight.start_offset <= absoluteOffset && highlight.end_offset > absoluteOffset);
+    const range = existing
+      ? { start: existing.start_offset - chapter.start_offset, end: existing.end_offset - chapter.start_offset }
+      : wordRangeAt(page.text, offset) ?? characterRangeAt(page.text, offset);
+    if (!range) return;
+    const savedStyle = decodeHighlightStyle(existing?.color ?? null);
+    setSelection({
+      chapterIndex: page.index,
+      startOffset: chapter.start_offset + range.start,
+      endOffset: chapter.start_offset + range.end,
+      anchor,
+      text: page.text.slice(range.start, range.end),
+      highlightId: existing?.id,
+      color: savedStyle.color,
+      underline: savedStyle.underline,
+      note: existing?.note ?? '',
+    });
+    setControlsVisible(false);
+    setOverlay('none');
+  }, [chIdx, chs, hls]);
+
+  const selectAllCurrentChapter = useCallback(() => {
+    if (!ch || activeText == null || !activeText.length) return;
+    setSelection({
+      chapterIndex: chIdx,
+      startOffset: ch.start_offset,
+      endOffset: ch.start_offset + activeText.length,
+      anchor: selection?.anchor ?? { x: winWidth / 2, y: insets.top + 16 },
+      text: activeText,
+      color: null,
+      underline: false,
+      note: '',
+    });
+  }, [activeText, ch, chIdx, insets.top, selection?.anchor, winWidth]);
+
+  const performSelectionAction = useCallback(async (action: SelectionAction) => {
+    const text = selection?.text;
+    if (!text?.trim()) return;
+    try {
+      if (action === 'copy') {
+        await Clipboard.setStringAsync(text);
+        toast('Copied to clipboard');
+        setSelection(null);
+        return;
+      }
+      if (action === 'share' || action === 'apps') {
+        await Share.share({ message: text });
+        setSelection(null);
+        return;
+      }
+      const query = encodeURIComponent(text.trim());
+      const destinations: Record<Exclude<SelectionAction, 'copy' | 'share' | 'apps'>, string> = {
+        search: `https://www.google.com/search?q=${query}`,
+        ask: `https://gemini.google.com/app?prompt=${query}`,
+        read: `https://translate.google.com/?sl=auto&tl=en&text=${query}&op=translate`,
+        reddit: `https://www.reddit.com/search/?q=${query}`,
+        dictionary: `https://www.google.com/search?q=${encodeURIComponent(`define ${text.trim()}`)}`,
+      };
+      await Linking.openURL(destinations[action]);
+      setSelection(null);
+    } catch {
+      toast('This action could not be opened');
+    }
+  }, [selection, toast]);
+
   function passageProps(page: LoadedChapter) {
     const cover = page.index === 0 && (!!doc?.cover_uri || (page.nav?.images?.length === 1 && !page.text.trim()));
     return { safeTop: cover ? 0 : insets.top, safeBottom: cover ? 0 : insets.bottom, style, coverUri: doc?.cover_uri, bookTitle: doc?.title ?? '', viewportHeight, margin: marginH,
       mediaDir: doc?.text_dir, fallbackTitle: doc?.format === 'epub' ? undefined : chs[page.index]?.title,
       startPadding: cover ? 0 : screenReader ? Math.max(0, toolbarHeight - insets.top) + 4 : 4,
-      endPadding: (screenReader ? progressHeight + 4 : insets.bottom + 6) - (cover ? 0 : insets.bottom) };
+      endPadding: (screenReader ? progressHeight + 4 : insets.bottom + 6) - (cover ? 0 : insets.bottom),
+      highlights: hls.filter(highlight => highlight.chapter_index === page.index).map(highlight => ({
+        ...highlight,
+        start_offset: highlight.start_offset - (chs[page.index]?.start_offset ?? 0),
+        end_offset: highlight.end_offset - (chs[page.index]?.start_offset ?? 0),
+      })),
+      onSelectText: page.index === chIdx ? (offset: number, anchor: SelectionAnchor) => openTextSelection(page, offset, anchor) : undefined,
+      onSelectHighlight: page.index === chIdx ? (highlightId: string, anchor: SelectionAnchor) => {
+        const highlight = hls.find(item => item.id === highlightId);
+        const chapter = chs[page.index];
+        if (highlight && chapter) openTextSelection(page, highlight.start_offset - chapter.start_offset, anchor, highlightId);
+      } : undefined };
   }
   function nextButtonFor(index: number) {
     const foreground = contrastText(style.bg);
@@ -690,6 +837,36 @@ function BookReader({ id }: { id: string }) {
           onJumpOffset={jumpToOffset}
           onDeleteBookmark={deleteBookmark}
           onDeleteHighlight={deleteHighlight}
+          onUpdateHighlightNote={updateHighlightNote}
+        />
+
+        <ReaderSelectionPopup
+          key={selection ? `${selection.chapterIndex}:${selection.startOffset}:${selection.endOffset}` : 'closed'}
+          visible={!!selection}
+          text={selection?.text ?? ''}
+          anchor={selection?.anchor ?? { x: 0, y: 0 }}
+          color={selection?.color ?? null}
+          underline={selection?.underline ?? false}
+          note={selection?.note ?? ''}
+          onClose={() => setSelection(null)}
+          onSelectAll={selectAllCurrentChapter}
+          onAction={performSelectionAction}
+          onColor={color => {
+            if (!selection) return;
+            if (!color) {
+              if (selection.highlightId) void removeSelectionHighlight(selection.highlightId);
+              return;
+            }
+            void saveSelection(color, selection.underline, selection.note);
+          }}
+          onUnderline={() => {
+            if (!selection) return;
+            const underline = !selection.underline;
+            setSelection(current => current ? { ...current, underline } : current);
+            if (selection.color) void saveSelection(selection.color, underline, selection.note);
+          }}
+          onNoteChange={note => setSelection(current => current ? { ...current, note } : current)}
+          onSaveNote={() => { if (selection) void saveSelection(selection.color, selection.underline, selection.note); }}
         />
 
         {/* Aa display popup (flow, brightness, theme, size, align, margin) */}

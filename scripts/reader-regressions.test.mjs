@@ -5,6 +5,20 @@ import { resumePosition } from '../src/features/reader/resume.ts';
 import { bookSliderDestination, displayPercent } from '../src/text/position.ts';
 import { searchBook } from '../src/features/reader/searchBook.ts';
 import { createChapterCache } from '../src/features/reader/chapterCache.ts';
+import { characterRangeAt, decodeHighlightStyle, encodeHighlightStyle, wordRangeAt } from '../src/features/reader/textSelection.ts';
+
+test('reader selection resolves Unicode words and preserves highlight color plus underline', () => {
+  const text = '🧙 café reading';
+  assert.deepEqual(characterRangeAt(text, 1), { start: 0, end: 2 });
+  assert.deepEqual(wordRangeAt(text, text.indexOf('café') + 2), { start: text.indexOf('café'), end: text.indexOf('café') + 4 });
+  assert.deepEqual(wordRangeAt(text, text.indexOf('reading') + 4), { start: text.indexOf('reading'), end: text.length });
+  assert.deepEqual(wordRangeAt('🧙 cafe\u0301', 6), { start: 3, end: 8 });
+  assert.equal(wordRangeAt(text, text.indexOf(' ')), null);
+  assert.deepEqual(decodeHighlightStyle(encodeHighlightStyle({ color: '#70d5b1', underline: true })),
+    { color: '#70d5b1', underline: true });
+  assert.equal(encodeHighlightStyle({ color: null, underline: true }), null);
+  assert.equal(encodeHighlightStyle({ color: null, underline: false }), null);
+});
 
 test('dismissing distant previews releases their chapters, while a committed jump keeps its neighbors', async () => {
   const reads = [];

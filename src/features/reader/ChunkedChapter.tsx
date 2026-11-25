@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Animated, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type TextStyle, type NativeScrollEvent, type LayoutChangeEvent } from 'react-native';
+import { Animated, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type TextStyle, type NativeScrollEvent, type LayoutChangeEvent, type GestureResponderEvent } from 'react-native';
 import { Image } from 'expo-image';
 import { ReaderCover } from './ReaderCover';
 import { GestureDetector, ScrollView as GestureScrollView } from 'react-native-gesture-handler';
@@ -7,9 +7,13 @@ import { useSwipeTurn, type Direction, type TurnDestination } from './useSwipeTu
 import { linksInRange } from '@/text/links';
 import type { BookLink, ChapterNavigation } from '@/formats/types';
 import { type Chunk, findChunkForOffset, paragraphRows } from '@/text/chunk';
+import type { HighlightRow } from '@/db/repositories/highlights';
+import { decodeHighlightStyle } from './textSelection';
+import type { SelectionAnchor } from './textSelection';
+import { contrastText } from '@/lib/color';
 
 const OVERSCAN = 3;
-type Line = { offset: number; y: number };
+type Line = { offset: number; y: number; x?: number; width?: number; length?: number };
 type TextFrame = { top?: number; lines?: Line[] };
 type Frame = TextFrame & { rows?: Map<number, TextFrame> };
 
@@ -31,38 +35,55 @@ function passageLine(frame: Frame, target: number, byOffset: boolean) {
   if (line) return { offset: line.offset, y: top + line.y };
 }
 
-const LinkedText = React.memo(function LinkedText({ chunk, linkText, links, styles, textStyle, color, onLink }: {
+const LinkedText = React.memo(function LinkedText({ chunk, linkText, links, styles, highlights, textStyle, color, onLink, onSelectHighlight }: {
   styles: ChapterNavigation['styles']; textStyle: TextStyle;
-  chunk: Chunk; linkText: string; links: BookLink[]; color: string; onLink(href: string, label: string): void;
+  chunk: Chunk; linkText: string; links: BookLink[];
+  highlights?: Pick<HighlightRow, 'id' | 'start_offset' | 'end_offset' | 'color' | 'note'>[];
+  color: string; onLink(href: string, label: string): void;
+  onSelectHighlight?: (id: string, anchor: SelectionAnchor) => void;
 }) {
   const text = chunk.text.replace(/\n$/, '');
   const end = chunk.startOffset + text.length;
   const spans = styles ? linksInRange(styles, chunk.startOffset, end) : [];
-  let spanIndex = 0;
   function styledText(from: number, to: number) {
-    if (!spans.length) return text.slice(from, to);
+    const annotations = highlights?.filter(highlight =>
+      highlight.start_offset < chunk.startOffset + to && highlight.end_offset > chunk.startOffset + from) ?? [];
+    if (!spans.length && !annotations.length) return text.slice(from, to);
     const nodes: React.ReactNode[] = [];
-    while (spanIndex < spans.length && from < to) {
-      const span = spans[spanIndex];
-      const left = span.start - chunk.startOffset, right = span.end - chunk.startOffset;
-      if (left >= to) break;
-      if (from < left) nodes.push(text.slice(from, left));
-      const start = Math.max(from, left);
-      const stop = Math.min(to, right);
-      const { bold, italic, underline, strike, scale, smallCaps } = span.style;
+    let cursor = from;
+    while (cursor < to) {
+      const absolute = chunk.startOffset + cursor;
+      const span = spans.find(item => item.start <= absolute && item.end > absolute);
+      const highlight = annotations.findLast(item => item.start_offset <= absolute && item.end_offset > absolute);
+      const nextSpan = spans.find(item => item.start > absolute);
+      const nextHighlight = annotations.find(item => item.start_offset > absolute);
+      const stop = Math.min(to,
+        span ? span.end - chunk.startOffset : nextSpan ? nextSpan.start - chunk.startOffset : to,
+        highlight ? highlight.end_offset - chunk.startOffset : nextHighlight ? nextHighlight.start_offset - chunk.startOffset : to);
+      if (stop <= cursor) break;
+      const { bold, italic, underline, strike, scale, smallCaps } = span?.style ?? {};
       const fontSize = textStyle.fontSize ?? 17;
+      const annotationStyle = highlight ? decodeHighlightStyle(highlight.color) : null;
+      const decorationLine = [
+        underline || annotationStyle?.underline || highlight?.note ? 'underline' : '',
+        strike ? 'line-through' : '',
+      ].filter(Boolean).join(' ');
       const style: TextStyle = {
         ...(bold && { fontWeight: 'bold' }),
         ...(italic && { fontStyle: 'italic' }),
         ...(smallCaps && { fontVariant: ['small-caps'] }),
-        ...(underline || strike ? { textDecorationLine: underline && strike ? 'underline line-through' : underline ? 'underline' : 'line-through' } : {}),
+        ...(decorationLine && { textDecorationLine: decorationLine as TextStyle['textDecorationLine'] }),
+        ...(highlight?.note && { textDecorationStyle: 'dotted' }),
         ...(scale && scale !== 1 ? { fontSize: fontSize * scale, lineHeight: Math.round((textStyle.lineHeight ?? fontSize) * scale) } : {}),
+        ...(annotationStyle?.color && { backgroundColor: annotationStyle.color, color: contrastText(annotationStyle.color) }),
       };
-      nodes.push(<Text key={start} style={style}>{text.slice(start, stop)}</Text>);
-      from = stop;
-      if (stop === right) spanIndex++;
+      nodes.push(<Text key={`${cursor}-${stop}`} style={style}
+        onPress={highlight && onSelectHighlight ? event => {
+          event.stopPropagation();
+          onSelectHighlight(highlight.id, { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY });
+        } : undefined}>{text.slice(cursor, stop)}</Text>);
+      cursor = stop;
     }
-    if (from < to) nodes.push(text.slice(from, to));
     return nodes;
   }
   const parts: React.ReactNode[] = [];
@@ -81,12 +102,16 @@ const LinkedText = React.memo(function LinkedText({ chunk, linkText, links, styl
   return <>{parts}{styledText(cursor, text.length)}</>;
 });
 
-function PassageText({ part, linkText, styles, links, textStyle, color, onLink, onLines, heading, indent = 0 }: {
+function PassageText({ part, linkText, styles, links, highlights, textStyle, color, onLink, onLines, onSelectText, onSelectHighlight, heading, indent = 0 }: {
   part: Chunk; linkText: string; styles: ChapterNavigation['styles']; links: BookLink[]; textStyle: TextStyle;
+  highlights?: Pick<HighlightRow, 'id' | 'start_offset' | 'end_offset' | 'color' | 'note'>[];
   color: string; onLink(href: string, label: string): void; onLines(lines: Line[]): void;
+  onSelectText?: (offset: number, anchor: SelectionAnchor) => void;
+  onSelectHighlight?: (id: string, anchor: SelectionAnchor) => void;
   heading?: boolean;
   indent?: number;
 }) {
+  const linesRef = useRef<Line[]>([]);
   const prefix = '\u2003'.repeat(indent);
   const scale = styles ? linksInRange(styles, part.startOffset, part.startOffset + part.text.length)
     .reduce((largest, span) => Math.max(largest, span.style.scale ?? 1), 1) : 1;
@@ -94,6 +119,18 @@ function PassageText({ part, linkText, styles, links, textStyle, color, onLink, 
     <Text
       accessibilityRole={heading ? 'header' : undefined}
       style={[textStyle, { flexGrow: 1, flexShrink: 1 }, scale > 1 && { lineHeight: Math.ceil((textStyle.lineHeight ?? 17) * scale) }]}
+      selectable
+      onLongPress={onSelectText ? (event: GestureResponderEvent) => {
+        const { locationX, locationY } = event.nativeEvent;
+        const line = linesRef.current.reduce<Line | undefined>((best, row) =>
+          Math.abs(row.y - locationY) < Math.abs((best?.y ?? Infinity) - locationY) ? row : best, undefined);
+        if (!line) return;
+        const width = line.width ?? 1;
+        const length = line.length ?? 1;
+        const fraction = Math.max(0, Math.min(1, (locationX - (line.x ?? 0)) / Math.max(1, width)));
+        onSelectText(line.offset + Math.min(Math.max(0, length - 1), Math.floor(fraction * length)),
+          { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY });
+      } : undefined}
       onTextLayout={(e) => {
         let cursor = 0;
         const displayed = prefix + part.text;
@@ -101,12 +138,15 @@ function PassageText({ part, linkText, styles, links, textStyle, color, onLink, 
           const match = displayed.indexOf(line.text, cursor);
           const local = match < 0 ? cursor : match;
           cursor = local + line.text.length;
-          return { offset: part.startOffset + Math.max(0, local - prefix.length), y: line.y };
+          return { offset: part.startOffset + Math.max(0, local - prefix.length), y: line.y, x: line.x,
+            width: line.width, length: Math.max(1, line.text.length - (local === 0 ? prefix.length : 0)) };
         });
+        linesRef.current = lines;
         onLines(lines);
       }}
     >
-      {prefix}<LinkedText chunk={part} linkText={linkText} links={links} styles={styles} textStyle={textStyle} color={color} onLink={onLink} />
+      {prefix}<LinkedText chunk={part} linkText={linkText} links={links} styles={styles} highlights={highlights}
+        textStyle={textStyle} color={color} onLink={onLink} onSelectHighlight={onSelectHighlight} />
     </Text>
   );
 }
@@ -129,6 +169,9 @@ type ChapterProps = {
   margin: number;
   textStyle: TextStyle;
   publisherStyles?: ChapterNavigation['styles'];
+  highlights?: Pick<HighlightRow, 'id' | 'start_offset' | 'end_offset' | 'color' | 'note'>[];
+  onSelectText?: (offset: number, anchor: SelectionAnchor) => void;
+  onSelectHighlight?: (id: string, anchor: SelectionAnchor) => void;
   paragraphs?: ChapterNavigation['paragraphs'];
   mediaDir?: string | null;
   startPadding?: number;
@@ -162,6 +205,9 @@ export function ChunkedChapter(props: ChapterProps) {
     margin,
     textStyle,
     publisherStyles,
+    highlights,
+    onSelectText,
+    onSelectHighlight,
     paragraphs,
     mediaDir,
     endPadding = 12,
@@ -377,11 +423,11 @@ export function ChunkedChapter(props: ChapterProps) {
                   {depth > 0 && <Text style={[textStyle, { minWidth: font * 1.3, marginEnd: font * 0.3, textAlign: 'right' }]}>
                     {row.first ? block.marker : undefined}
                   </Text>}
-                  <PassageText part={row} linkText={linkText} indent={row.first && !block?.heading && !block?.marker && block?.align !== 'center' && block?.align !== 'right' && row.text.trim() ? indent : 0} heading={block?.heading} styles={publisherStyles} links={links} textStyle={block?.align ? { ...textStyle, textAlign: block.align } : textStyle} color={linkColor} onLink={onLink}
+                  <PassageText part={row} linkText={linkText} indent={row.first && !block?.heading && !block?.marker && block?.align !== 'center' && block?.align !== 'right' && row.text.trim() ? indent : 0} heading={block?.heading} styles={publisherStyles} links={links} highlights={highlights} textStyle={block?.align ? { ...textStyle, textAlign: block.align } : textStyle} color={linkColor} onLink={onLink} onSelectText={onSelectText} onSelectHighlight={onSelectHighlight}
                     onLines={(lines) => updateRow(chunk.chunkIndex, row.startOffset, { lines })} />
                 </View>
               );
-            }) : <PassageText part={chunk} linkText={linkText} styles={publisherStyles} links={links} textStyle={textStyle} color={linkColor} onLink={onLink}
+            }) : <PassageText part={chunk} linkText={linkText} styles={publisherStyles} links={links} highlights={highlights} textStyle={textStyle} color={linkColor} onLink={onLink} onSelectText={onSelectText} onSelectHighlight={onSelectHighlight}
               onLines={(lines) => updateFrame(chunk.chunkIndex, { lines })} />}
           </View>
         );

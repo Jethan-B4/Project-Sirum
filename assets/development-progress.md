@@ -22,6 +22,13 @@ Tracks implementation status against `offline-reader-dev-plan.md`. Update this f
 
 Legend: ✅ done · 🟢 advanced / nearly done · 🟡 partial · ⬜ not started
 
+## Reader text selection, highlights and notes (2026-11-25)
+
+- Long-pressing selectable passage text opens a reader-themed toolbar while retaining the platform's native selection affordances; tapping a saved highlight reopens its actions. The toolbar offers current-chapter Select All, Copy, OS Share, online Search and More/device-app actions.
+- Colored highlights (and optional underline) persist in the existing highlight color field; the X removes a saved highlight, and colorless selections/notes are never persisted as highlights. Saved styling renders in the passage, with a dotted underline for note-bearing text.
+- The selection toolbar stays near the touched passage and displays the full excerpt in a scrollable preview. The Annotations tab labels the excerpt and note separately, includes the chapter and color, and provides note editing/deletion without overlapping the passage text.
+- Added `expo-clipboard` at the SDK 58-compatible version for Copy. Regression tests cover Unicode word selection and highlight-style encoding. Physical-device verification of native selection handles, toolbar coexistence, and share targets remains open.
+
 ## Reader links, responsiveness and touch feedback (2026-11-25)
 
 - Hyperlinks open a themed preview showing the link label and the complete destination paragraph, with **Continue reading** and **Go to passage** actions. External links show their address and require an explicit **Open link** action; unavailable destinations remain dismissible in the same popup.
@@ -346,7 +353,7 @@ The screens, layout, and interactions from `sirum-ui-prototype.html` are impleme
 | M3 TXT slice | Import/read/save/restore TXT offline | ✅ Implemented and verified |
 | M4 EPUB reader | Full EPUB pipeline + UI features | ✅ Full EPUB extraction (OPF, TOC, covers, DRM detection) & redesigned UI |
 | M4b Reader screen parity | Contents panel, display popup, in-book search, scrubber (5.6.1) | 🟢 Mostly done | Scrolled flow and viewport page turns implemented. Line-aligned pagination and physical-device profiling remain open. |
-| M5 PDF + annotations | pdf.js extraction; bookmarks/highlights/notes | 🟡 Partial | Bookmarks UI done; highlights list/delete only (no creation); PDF not started |
+| M5 PDF + annotations | pdf.js extraction; bookmarks/highlights/notes | 🟡 Partial | Highlight creation, styling, note editing and annotation list implemented; PDF not started |
 | M6 Backend | Schema + RLS + triggers verified | 🟡 SQL written, unverified |
 | M7 Google sign-in | EAS dev build, sign in/out | ⬜ Not started |
 | M8 Sync v1 | Push/pull, "Not on this device", two-device test | ⬜ Not started |
@@ -361,6 +368,6 @@ The screens, layout, and interactions from `sirum-ui-prototype.html` are impleme
 
 1. **Page boundaries.** Profile viewport turns in heavily illustrated chapters. Exact line-aligned pagination and physical-device frame measurements remain open.
 2. **PDF importer** — `react-native-webview` + pdf.js spike per plan 5.4.
-3. **Highlight/note creation UI** — annotations tab lists existing rows only; text-selection anchoring is M5 scope (plan 5.11).
+3. **Native text-selection verification** — verify selection handles, custom popup coexistence, copy/share targets, and text hit-testing on Android and iOS.
 4. **Reactive reads** — repository change notifications so library updates without focus reloads (plan 4.6).
 5. **Large-book device profiling** check restore, chapter transitions, search jumps, peak memory and long flings on Android and iOS, including a 500+ page EPUB and a single-chapter TXT.
