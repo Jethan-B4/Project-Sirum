@@ -8,6 +8,7 @@ import { useSettings } from '@/features/settings/SettingsProvider';
 import { SettingKeys } from '@/lib/settingsKeys';
 import { contrastText } from '@/lib/color';
 import { useAppTheme } from '@/theme/ThemeProvider';
+import { pressFeedback } from '@/components/ui/press-feedback';
 
 /** Top app bar (prototype `.bar`): optional leading control, title + count pill, actions. */
 export function AppBar({
@@ -98,7 +99,7 @@ export function BottomNav() {
               accessibilityLabel={item.label}
               accessibilityState={{ selected: on }}
               onPress={() => router.navigate(item.route as never)}
-              className="flex-1 items-center">
+              className={`flex-1 items-center ${pressFeedback}`}>
               <View
                 className="px-5 py-1 rounded-2xl mb-0.5"
                 style={on ? { backgroundColor: accent.acb } : undefined}>
@@ -195,7 +196,7 @@ function SideDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
       key={label}
       accessibilityRole="button"
       onPress={onPress}
-      className="flex-row items-center gap-5 px-5 py-3.5"
+      className={`flex-row items-center gap-5 px-5 py-3.5 ${pressFeedback}`}
       style={activeItem ? { backgroundColor: accent.acb } : undefined}>
       <Icon name={icon} size={22} tone={activeItem ? contrastText(accent.acb) : 'default'} />
       <Text

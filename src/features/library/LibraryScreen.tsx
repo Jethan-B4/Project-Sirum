@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppBar, Screen, useChrome } from '@/components/chrome/app-bar';
 import { BookCard, BookRow } from '@/components/ui/book';
 import { Icon, IconButton } from '@/components/ui/icon';
+import { pressFeedback } from '@/components/ui/press-feedback';
 import { Chip, SectionLabel, SegmentedControl } from '@/components/ui/controls';
 import { BottomSheet } from '@/components/ui/sheet';
 import { documents, type LibraryDocument } from '@/db/repositories/documents';
@@ -149,7 +150,7 @@ export default function LibraryScreen() {
           style={styles.searchInput}
         />
         {search.length > 0 && (
-          <Pressable onPress={() => setSearch('')} hitSlop={8}>
+          <Pressable onPress={() => setSearch('')} hitSlop={8} className={pressFeedback}>
             <Icon name="close-circle" size={18} tone="muted" />
           </Pressable>
         )}
@@ -188,7 +189,7 @@ export default function LibraryScreen() {
                 accessibilityRole="tab"
                 accessibilityState={{ selected: on }}
                 onPress={() => setTab(key)}
-                style={[styles.tabButton, on && styles.tabButtonActive]}>
+                className={pressFeedback} style={[styles.tabButton, on && styles.tabButtonActive]}>
                 <Text style={[styles.tabButtonText, on && styles.tabButtonTextActive]}>{label}</Text>
                 {count !== undefined && (
                   <View style={[styles.tabCountBadge, on && styles.tabCountBadgeActive]}>
@@ -226,7 +227,7 @@ export default function LibraryScreen() {
           {!search && !(filters.status?.length || filters.formats?.length) && tab === 'all' && (
             <View style={styles.emptyActionsRow}>
               <Pressable
-                style={styles.emptyPrimaryButton}
+                className={pressFeedback} style={styles.emptyPrimaryButton}
                 onPress={() => router.push('/import' as never)}>
                 <Icon name="add" size={18} tone="onAccent" />
                 <Text style={[styles.emptyPrimaryButtonText, { color: contrastText(accent.hex) }]}>Import Books</Text>
@@ -316,7 +317,7 @@ export default function LibraryScreen() {
             {/* Always use this choice toggle */}
             <Pressable
               onPress={() => setAlwaysUseChoice((v) => !v)}
-              style={styles.alwaysUseRow}>
+              className={pressFeedback} style={styles.alwaysUseRow}>
               <View
                 style={[
                   styles.checkboxBox,
@@ -338,7 +339,7 @@ export default function LibraryScreen() {
 
             <View style={styles.modalActions}>
               <Pressable
-                style={[
+                className={pressFeedback} style={[
                   styles.modalGhostButton,
                   {
                     backgroundColor: isDark ? '#282830' : '#f0f0f4',
@@ -351,7 +352,7 @@ export default function LibraryScreen() {
                 </Text>
               </Pressable>
               <Pressable
-                style={[styles.modalPrimaryButton, { backgroundColor: accent.hex }]}
+                className={pressFeedback} style={[styles.modalPrimaryButton, { backgroundColor: accent.hex }]}
                 onPress={() => chooseOrder('recent')}>
                 <Text style={[styles.modalPrimaryButtonText, { color: contrastText(accent.hex) }]}>Recent first</Text>
               </Pressable>

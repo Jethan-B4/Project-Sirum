@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Icon } from '@/components/ui/icon';
+import { pressFeedback } from '@/components/ui/press-feedback';
 import { contrastText } from '@/lib/color';
 import { useAppTheme } from '@/theme/ThemeProvider';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -309,7 +310,7 @@ export default function ImportScreen() {
                 accessibilityRole="button"
                 disabled={busy}
                 onPress={() => setScan(null)}
-                className="py-3 px-2"
+                className={`py-3 px-2 ${pressFeedback}`}
               >
                 <Text className="font-ui text-accent font-semibold">Close</Text>
               </Pressable>
@@ -335,7 +336,7 @@ export default function ImportScreen() {
                   accessibilityLabel={item.name}
                   accessibilityState={{ checked: item.selected, disabled: busy }}
                   disabled={busy}
-                  className="flex-row items-center gap-3 px-4 py-3 border-b border-line"
+                  className={`flex-row items-center gap-3 px-4 py-3 border-b border-line ${pressFeedback}`}
                   onPress={() =>
                     setScan((previous) => {
                       if (!previous) return previous;
@@ -408,7 +409,7 @@ export default function ImportScreen() {
                   {r.status === 'duplicate' && r.documentId && (
                     <Pressable
                       onPress={() => router.push(`/reader/${r.documentId}` as never)}
-                      className="px-2 py-1 rounded-full"
+                      className={`px-2 py-1 rounded-full ${pressFeedback}`}
                       style={{ backgroundColor: accent.hexStrong }}
                     >
                       <Text

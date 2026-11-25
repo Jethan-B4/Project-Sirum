@@ -37,7 +37,8 @@ Implementation tracking lives in `development-progress.md`. Compared with this p
 - **Differences from the plan:** styling uses NativeWind v4 with CSS-variable theme tokens; routes live in `src/app/`, shared UI in `src/components/`, theming in `src/theme/`, and settings in `src/features/settings/` (see 3.2). Import stages files through a multi-strategy helper (5.1).
 - **Reader and import updates:** Contents, bookmarks, in-book search, cover normalization and import reports are implemented. Books open at the selected chapter and render a moving window of text chunks. Interrupted imports can be retried, and repeat imports can repair a legacy cover.
 - **Adaptive interface.** Library categories show labels and counts, including zero, in both themes. The grid responds to viewport width and text scale. Portrait and landscape layouts use safe-area insets. History supports a local title, author and chapter search alongside its own filters and ordering.
-- **Links in the reader.** EPUB labels retain their link ranges and target anchors in normalized chapter text. TXT web addresses are also actionable. Tapping a blue link shows its destination and requires confirmation before opening an external address or moving within the book. Linked EPUB footnotes outside the chapter sequence open separately.
+- **Links in the reader.** EPUB labels retain their link ranges and target anchors in normalized chapter text. TXT web addresses are also actionable. Tapping a link opens a themed preview of its complete linked passage (or external address), with explicit choices to continue reading, open the link, or navigate to the passage. Linked EPUB footnotes outside the chapter sequence open separately.
+- **Navigation responsiveness.** Adjacent chapters are preloaded for faster swipes and chapter jumps. Standard stack navigation does not animate through an intermediate screen, avoiding the previous transition flash. Shared app controls provide consistent pressed-state feedback.
 - **Release checks.** Run `npm run check:package-size -- <package-path>` on each production binary. The production EAS success hook runs the same check. Exercise a 500+ page book in a release build on a lower-end phone, including continuous scrolling, chapter jumps, search and rotation. Record frame timing and memory alongside release package size.
 - **Remaining work:** Device performance measurements, line-aligned page boundaries, highlight and note creation, PDF extraction, reactive repository reads, Google sign-in and sync. The Supabase SQL still needs live verification.
 
@@ -632,7 +633,7 @@ An EPUB is a ZIP archive of XHTML chapters plus metadata. Parse it with pure-JS 
 - **One giant spine file, or hundreds of tiny ones.** Some books put the whole text in one spine item; others split chapters into many small files. Chapter percentage is only as meaningful as the chapters. v1 uses spine items; a later improvement groups spine items by TOC entries, so one TOC chapter spans several files.
 - **Missing or wrong TOC** and TOC entries that point into the middle of a spine file (fragments).
 - **CJK, right-to-left, and ruby text:** extraction works, but rendering and text selection need testing.
-- **Links and footnotes** retain their destinations and ask for confirmation. Tables and math use their extracted text.
+- **Links and footnotes** retain their destinations and open a passage preview with explicit navigation or continue-reading actions. External links require a separate open action. Tables and math use their extracted text.
 - **Memory and time:** extract chapter by chapter, write each to disk, and release it. Show progress.
 
 **Extraction cache layout (rebuildable from the original)**

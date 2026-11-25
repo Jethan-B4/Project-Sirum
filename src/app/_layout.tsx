@@ -26,22 +26,20 @@ export default function RootLayout() {
             <Stack
               screenOptions={{
                 headerShown: false,
-                animation: 'fade', // Smooth crossfade default for top-level navigation
-                animationDuration: 180,
+                animation: 'none',
               }}>
-              {/* Primary tab-level screens with instant/crossfade transitions */}
-              <Stack.Screen name="index" options={{ animation: 'fade' }} />
-              <Stack.Screen name="history" options={{ animation: 'fade' }} />
-              <Stack.Screen name="import" options={{ animation: 'fade' }} />
-              <Stack.Screen name="settings" options={{ animation: 'fade' }} />
+              {/* Keep primary navigation immediate; screen transitions previously flashed during mount. */}
+              <Stack.Screen name="index" />
+              <Stack.Screen name="history" />
+              <Stack.Screen name="import" />
+              <Stack.Screen name="settings" />
 
-              {/* Sub-settings pages with smooth hierarchical slide */}
-              <Stack.Screen name="settings-appearance" options={{ animation: 'slide_from_right', animationDuration: 220 }} />
-              <Stack.Screen name="settings-library" options={{ animation: 'slide_from_right', animationDuration: 220 }} />
-              <Stack.Screen name="settings-reader" options={{ animation: 'slide_from_right', animationDuration: 220 }} />
-              <Stack.Screen name="settings-import" options={{ animation: 'slide_from_right', animationDuration: 220 }} />
-              <Stack.Screen name="settings-sync" options={{ animation: 'slide_from_right', animationDuration: 220 }} />
-              <Stack.Screen name="settings-about" options={{ animation: 'slide_from_right', animationDuration: 220 }} />
+              <Stack.Screen name="settings-appearance" />
+              <Stack.Screen name="settings-library" />
+              <Stack.Screen name="settings-reader" />
+              <Stack.Screen name="settings-import" />
+              <Stack.Screen name="settings-sync" />
+              <Stack.Screen name="settings-about" />
 
               {/* Reader: immersive slide up from bottom */}
               <Stack.Screen

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { ReaderOptionsPopup } from './ReaderOptionsPopup';
 import { IconButton } from '@/components/ui/icon';
+import { pressFeedback } from '@/components/ui/press-feedback';
 
 import { Chip, ColorSwatches, SectionLabel, SegmentedControl, SliderRow } from '@/components/ui/controls';
 import { useAppTheme } from '@/theme/ThemeProvider';
@@ -92,8 +93,10 @@ export function DisplayPopup({
               return (
                 <Pressable key={name} accessibilityRole="button" accessibilityLabel={name}
                   accessibilityState={{ selected }} onPress={() => onPatch({ bg, tx })}
-                  className="rounded-lg mr-2 mb-2 items-center justify-center px-3 py-2"
-                  style={{ backgroundColor: bg, borderWidth: 2, borderColor: selected ? accent.hex : colors.ln }}>
+                  className={`rounded-lg mr-2 mb-2 items-center justify-center px-3 py-2 ${pressFeedback}`}
+                  style={{
+                    backgroundColor: bg, borderWidth: 2, borderColor: selected ? accent.hex : colors.ln,
+                  }}>
                   <Text style={{ color: tx }}>{name}</Text>
                 </Pressable>
               );

@@ -3,6 +3,7 @@ import React from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
 import { AppBar, Screen } from '@/components/chrome/app-bar';
+import { pressFeedback } from '@/components/ui/press-feedback';
 import { Icon, type IconName } from '@/components/ui/icon';
 import { useSettings } from './SettingsProvider';
 import { SettingKeys } from '@/lib/settingsKeys';
@@ -37,8 +38,7 @@ export default function SettingsHubScreen() {
             key={c.route}
             accessibilityRole="button"
             onPress={() => router.push({ pathname: c.route, params: fromReader ? { from: 'reader' } : {} } as Href)}
-            className="flex-row items-center gap-5 px-2 py-4"
-            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}>
+            className={`flex-row items-center gap-5 px-2 py-4 ${pressFeedback}`}>
             <Icon name={c.icon} size={24} tone="accent" />
             <View className="flex-1">
               <Text className="font-ui text-tx text-[17px] font-medium">{c.title}</Text>

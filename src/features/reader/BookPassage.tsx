@@ -31,7 +31,7 @@ export function BookPassage({ page, style, viewportHeight, coverUri, bookTitle, 
   const embeddedCover = index === 0 && nav?.images?.length === 1 && !text.trim();
   const fontSize = BASE_FONT_SIZE * style.size / 100;
   const fontFamily = readingFontFamily(style.fam);
-  return <ChunkedChapter {...reader} chunks={chunks} length={text.length} links={links} linkColor={linkColor(style.bg)}
+  return <ChunkedChapter {...reader} chunks={chunks} linkText={text} length={text.length} links={links} linkColor={linkColor(style.bg)}
     coverHeight={embeddedCover ? viewportHeight : undefined} paragraphs={paragraphs} publisherStyles={nav?.styles}
     indent={style.indentParagraphs ? style.indentLength : 0} textStyle={{ color: style.tx, fontFamily, fontSize,
       fontWeight: String(style.wt) as '400', lineHeight: Math.round(fontSize * style.lh), textAlign: style.align }}>

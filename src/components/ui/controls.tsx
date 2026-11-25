@@ -4,6 +4,7 @@ import { Pressable, Text, View } from 'react-native';
 
 import { contrastText } from '@/lib/color';
 import { useAppTheme } from '@/theme/ThemeProvider';
+import { pressFeedback } from './press-feedback';
 
 /** Selectable chip (prototype `.chip`). */
 export function Chip({
@@ -26,7 +27,7 @@ export function Chip({
       onPress={onPress}
       className={`border rounded-2xl px-3 py-1.5 mr-1.5 mb-1.5 ${
         selected ? 'border-accent' : 'border-line'
-      } ${disabled ? 'opacity-40' : ''}`}
+      } ${disabled ? 'opacity-40' : ''} ${pressFeedback}`}
       style={selected ? { backgroundColor: accent.acb } : undefined}>
       <Text
         className="font-ui text-tx"
@@ -153,7 +154,7 @@ export function ColorSwatches({
               accessibilityRole="button"
               accessibilityLabel={`${label} ${hex}`}
               onPress={() => onChange(hex)}
-              className="w-9 h-9 rounded-lg mr-2 mb-2 items-center justify-center"
+              className={`w-9 h-9 rounded-lg mr-2 mb-2 items-center justify-center ${pressFeedback}`}
               style={{
                 backgroundColor: hex,
                 borderWidth: selected ? 2 : 1,
@@ -186,7 +187,7 @@ export function PrimaryButton({
       accessibilityRole="button"
       disabled={disabled}
       onPress={onPress}
-      className={`rounded-full px-5 py-2.5 self-start mt-1 ${disabled ? 'opacity-40' : ''}`}
+      className={`rounded-full px-5 py-2.5 self-start mt-1 ${disabled ? 'opacity-40' : ''} ${pressFeedback}`}
       style={{ backgroundColor: ghost ? 'transparent' : accent.hex }}>
       <Text
         className={ghost ? 'font-ui text-accent font-semibold' : 'font-ui font-semibold'}

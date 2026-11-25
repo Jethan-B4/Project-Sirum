@@ -10,6 +10,22 @@ export function plainLinks(text: string): BookLink[] {
   return links;
 }
 
+export function linkedPassage(text: string, offset: number, paragraphs: readonly { offset: number }[] = []) {
+  const position = Math.max(0, Math.min(text.length, offset));
+  let lo = 0, hi = paragraphs.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (paragraphs[mid].offset <= position) lo = mid + 1;
+    else hi = mid;
+  }
+  if (lo > 0) return text.slice(paragraphs[lo - 1].offset, paragraphs[lo]?.offset).trim();
+
+  // Legacy imports can have text without paragraph metadata.
+  const start = position === 0 ? 0 : text.lastIndexOf('\n', position - 1) + 1;
+  const end = text.indexOf('\n', position);
+  return text.slice(start, end < 0 ? undefined : end).trim();
+}
+
 export function resolveBookLink(href: string, source: string, sources: (string | null)[], dir = '') {
   if (/^(https?:|mailto:|tel:|\/\/)/i.test(href)) {
     const address = href.startsWith('//') ? 'https:' + href : href;

@@ -31,9 +31,9 @@ function passageLine(frame: Frame, target: number, byOffset: boolean) {
   if (line) return { offset: line.offset, y: top + line.y };
 }
 
-const LinkedText = React.memo(function LinkedText({ chunk, links, styles, textStyle, color, onLink }: {
+const LinkedText = React.memo(function LinkedText({ chunk, linkText, links, styles, textStyle, color, onLink }: {
   styles: ChapterNavigation['styles']; textStyle: TextStyle;
-  chunk: Chunk; links: BookLink[]; color: string; onLink(href: string): void;
+  chunk: Chunk; linkText: string; links: BookLink[]; color: string; onLink(href: string, label: string): void;
 }) {
   const text = chunk.text.replace(/\n$/, '');
   const end = chunk.startOffset + text.length;
@@ -73,7 +73,7 @@ const LinkedText = React.memo(function LinkedText({ chunk, links, styles, textSt
     if (cursor < from) parts.push(styledText(cursor, from));
     parts.push(<Text key={link.start} accessibilityRole="link" onPress={(event) => {
       event.stopPropagation();
-      onLink(link.href);
+      onLink(link.href, linkText.slice(link.start, link.end));
     }}
       style={{ color, textDecorationLine: 'underline' }}>{styledText(from, to)}</Text>);
     cursor = to;
@@ -81,9 +81,9 @@ const LinkedText = React.memo(function LinkedText({ chunk, links, styles, textSt
   return <>{parts}{styledText(cursor, text.length)}</>;
 });
 
-function PassageText({ part, styles, links, textStyle, color, onLink, onLines, heading, indent = 0 }: {
-  part: Chunk; styles: ChapterNavigation['styles']; links: BookLink[]; textStyle: TextStyle;
-  color: string; onLink(href: string): void; onLines(lines: Line[]): void;
+function PassageText({ part, linkText, styles, links, textStyle, color, onLink, onLines, heading, indent = 0 }: {
+  part: Chunk; linkText: string; styles: ChapterNavigation['styles']; links: BookLink[]; textStyle: TextStyle;
+  color: string; onLink(href: string, label: string): void; onLines(lines: Line[]): void;
   heading?: boolean;
   indent?: number;
 }) {
@@ -106,7 +106,7 @@ function PassageText({ part, styles, links, textStyle, color, onLink, onLines, h
         onLines(lines);
       }}
     >
-      {prefix}<LinkedText chunk={part} links={links} styles={styles} textStyle={textStyle} color={color} onLink={onLink} />
+      {prefix}<LinkedText chunk={part} linkText={linkText} links={links} styles={styles} textStyle={textStyle} color={color} onLink={onLink} />
     </Text>
   );
 }
@@ -114,9 +114,10 @@ function PassageText({ part, styles, links, textStyle, color, onLink, onLines, h
 /** Keep a few native text blocks around the visible passage, in source order. */
 type ChapterProps = {
   chunks: Chunk[];
+  linkText: string;
   links: BookLink[];
   linkColor: string;
-  onLink(href: string): void;
+  onLink(href: string, label: string): void;
   length: number;
   initialOffset: number | (() => number);
   onMove(offset: number): void;
@@ -146,6 +147,7 @@ type ChapterProps = {
 export function ChunkedChapter(props: ChapterProps) {
   const {
     chunks,
+    linkText,
     links,
     linkColor,
     onLink,
@@ -347,7 +349,7 @@ export function ChunkedChapter(props: ChapterProps) {
           return <View key={chunk.chunkIndex} style={{ marginHorizontal: fullCover ? 0 : margin, paddingVertical: fullCover ? 0 : 6 }}
             onLayout={(e) => { onLayout(e); updateFrame(index, { lines: [{ offset: chunk.startOffset, y: 0 }] }); }}>
             {illustration.href ? <Pressable accessibilityRole="link" accessibilityLabel={illustration.alt || 'Linked illustration'}
-              onPress={(e) => { e.stopPropagation(); onLink(illustration.href!); }}>{picture}</Pressable> : picture}
+              onPress={(e) => { e.stopPropagation(); onLink(illustration.href!, illustration.alt || 'Linked illustration'); }}>{picture}</Pressable> : picture}
           </View>;
         }
         const font = textStyle.fontSize ?? 17;
@@ -375,11 +377,11 @@ export function ChunkedChapter(props: ChapterProps) {
                   {depth > 0 && <Text style={[textStyle, { minWidth: font * 1.3, marginEnd: font * 0.3, textAlign: 'right' }]}>
                     {row.first ? block.marker : undefined}
                   </Text>}
-                  <PassageText part={row} indent={row.first && !block?.heading && !block?.marker && block?.align !== 'center' && block?.align !== 'right' && row.text.trim() ? indent : 0} heading={block?.heading} styles={publisherStyles} links={links} textStyle={block?.align ? { ...textStyle, textAlign: block.align } : textStyle} color={linkColor} onLink={onLink}
+                  <PassageText part={row} linkText={linkText} indent={row.first && !block?.heading && !block?.marker && block?.align !== 'center' && block?.align !== 'right' && row.text.trim() ? indent : 0} heading={block?.heading} styles={publisherStyles} links={links} textStyle={block?.align ? { ...textStyle, textAlign: block.align } : textStyle} color={linkColor} onLink={onLink}
                     onLines={(lines) => updateRow(chunk.chunkIndex, row.startOffset, { lines })} />
                 </View>
               );
-            }) : <PassageText part={chunk} styles={publisherStyles} links={links} textStyle={textStyle} color={linkColor} onLink={onLink}
+            }) : <PassageText part={chunk} linkText={linkText} styles={publisherStyles} links={links} textStyle={textStyle} color={linkColor} onLink={onLink}
               onLines={(lines) => updateFrame(chunk.chunkIndex, { lines })} />}
           </View>
         );

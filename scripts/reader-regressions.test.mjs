@@ -4,6 +4,44 @@ import { chunkChapter, findChunkForOffset, paragraphRows, plainParagraphs } from
 import { resumePosition } from '../src/features/reader/resume.ts';
 import { bookSliderDestination, displayPercent } from '../src/text/position.ts';
 import { searchBook } from '../src/features/reader/searchBook.ts';
+import { createChapterCache } from '../src/features/reader/chapterCache.ts';
+
+test('dismissing distant previews releases their chapters, while a committed jump keeps its neighbors', async () => {
+  const reads = [];
+  const cache = createChapterCache(async index => {
+    reads.push(index);
+    return { index };
+  }, () => true);
+  cache.focus(2);
+  const neighbor = cache.load(3);
+  assert.equal(cache.load(3), neighbor);
+  await neighbor;
+  const preview = await cache.load(45);
+  assert.notEqual(await cache.load(45), preview);
+  cache.focus(45, preview);
+  assert.equal(await cache.load(45), preview);
+  await cache.load(3);
+  assert.deepEqual(reads, [3, 45, 45, 3]);
+});
+
+test('stale preload failures preserve newer reads and incomplete presentation can be retried', async () => {
+  const requests = [];
+  const cache = createChapterCache(() => new Promise((resolve, reject) => requests.push({ resolve, reject })),
+    page => !!page.nav);
+  const stale = cache.load(1);
+  cache.focus(8);
+  cache.focus(0);
+  const replacement = cache.load(1);
+  requests[0].reject(new Error('read failed'));
+  await assert.rejects(stale, /read failed/);
+  assert.equal(cache.load(1), replacement);
+  requests[1].resolve({ nav: null });
+  assert.equal((await replacement).nav, null);
+  const retry = cache.load(1);
+  requests[2].resolve({ nav: {} });
+  assert.deepEqual(await retry, { nav: {} });
+  assert.equal(cache.load(1), retry);
+});
 
 const chapters = Array.from({ length: 600 }, (_, i) => ({
   chapter_index: i,
@@ -150,7 +188,7 @@ test('EPUB link ranges preserve repeated labels and exact normalized UTF-16 offs
 });
 
 test('reader resolves book fragments and keeps external links separate', async () => {
-  const { resolveBookLink, plainLinks, linksInRange } = await import('../src/text/links.ts');
+  const { resolveBookLink, plainLinks, linksInRange, linkedPassage } = await import('../src/text/links.ts');
   const sources = ['text/intro.xhtml', 'notes/end%20notes.xhtml'];
   const resolve = (href) => resolveBookLink(href, sources[0], sources, 'OPS');
   assert.deepEqual(resolve('../notes/end%20notes.xhtml#n1'), {kind: 'internal', index: 1, fragment: 'n1', address: 'OPS/notes/end notes.xhtml#n1'});
@@ -162,6 +200,25 @@ test('reader resolves book fragments and keeps external links separate', async (
   assert.equal(link.href, 'https://example.org/test');
   assert.deepEqual(linksInRange([link], link.start+2, link.end), [link]);
   assert.deepEqual(linksInRange([link], link.end, link.end+4), []);
+  const note = 'Opening text\nA complete linked note with all of its explanation.\nFollowing text';
+  const noteOffset = note.indexOf('linked');
+  assert.equal(linkedPassage(note, noteOffset, [
+    { offset: 0 }, { offset: note.indexOf('A complete') }, { offset: note.indexOf('Following') },
+  ]), 'A complete linked note with all of its explanation.');
+  assert.equal(linkedPassage('First line\nSecond linked line\nThird line', 14), 'Second linked line');
+});
+
+test('preview paragraphs include embedded newlines and support incomplete legacy layout data', async () => {
+  const { linkedPassage } = await import('../src/text/links.ts');
+  const text = 'First\nSecond\nA note\nwith a line break\nLast.';
+  const note = text.indexOf('A note');
+  const last = text.indexOf('Last.');
+  const rows = [{ offset: note }, { offset: last }];
+  assert.equal(linkedPassage(text, 0, rows), 'First');
+  assert.equal(linkedPassage(text, note, rows), 'A note\nwith a line break');
+  assert.equal(linkedPassage(text, last - 1, rows), 'A note\nwith a line break');
+  assert.equal(linkedPassage(text, text.length, rows), 'Last.');
+  assert.equal(linkedPassage('', 0), '');
 });
 
 test('accent foregrounds stay readable for light, dark, and middle-luminance fills', async () => {

@@ -2,7 +2,7 @@
 
 Tracks implementation status against `offline-reader-dev-plan.md`. Update this file as milestones complete.
 
-**Last updated:** 2026-11-24
+**Last updated:** 2026-11-25
 
 ---
 
@@ -21,6 +21,13 @@ Tracks implementation status against `offline-reader-dev-plan.md`. Update this f
 | Phase 8: Polish & release | Partial | Adaptive Library and reader controls implemented. Production package size check in place. |
 
 Legend: ✅ done · 🟢 advanced / nearly done · 🟡 partial · ⬜ not started
+
+## Reader links, responsiveness and touch feedback (2026-11-25)
+
+- Hyperlinks open a themed preview showing the link label and the complete destination paragraph, with **Continue reading** and **Go to passage** actions. External links show their address and require an explicit **Open link** action; unavailable destinations remain dismissible in the same popup.
+- The reader caches the current and adjacent chapter loads so horizontal swipes and chapter navigation can reuse prepared text and EPUB navigation data. Cache failures remain retryable and are reported if the user requests that chapter.
+- Primary app navigation no longer animates between stacked screens, removing the brief transition flash. Shared buttons and navigation controls now have consistent pressed-state scale and opacity feedback; the reader's **Next chapter** control clips its Android ripple to its rounded shape.
+- Validation passed: 19 reader regression tests, Expo lint, `npx tsc --noEmit`, and an Android Expo bundle export. Physical-device touch feel and frame-pacing verification remains open.
 
 ---
 

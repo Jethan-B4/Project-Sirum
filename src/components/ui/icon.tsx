@@ -4,6 +4,7 @@ import { Pressable, View } from 'react-native';
 
 import { contrastText } from '@/lib/color';
 import { useAppTheme } from '@/theme/ThemeProvider';
+import { pressFeedback } from './press-feedback';
 
 export type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -51,8 +52,7 @@ export function IconButton({
       accessibilityRole="button"
       accessibilityLabel={label}
       onPress={onPress}
-      className="p-2 rounded-full"
-      style={({ pressed }) => (pressed ? { opacity: 0.6 } : undefined)}>
+      className={`p-2 rounded-full ${pressFeedback}`}>
       <Ionicons name={icon} size={size} color={color} />
     </Pressable>
   );

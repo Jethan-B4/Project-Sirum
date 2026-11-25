@@ -6,6 +6,7 @@ import { Pressable, StyleSheet, Text, View, type DimensionValue } from 'react-na
 import { Icon } from '@/components/ui/icon';
 import type { LibraryDocument } from '@/db/repositories/documents';
 import { useAppTheme } from '@/theme/ThemeProvider';
+import { pressFeedback } from './press-feedback';
 
 // Curated luxury book cover palette for titles without cover art
 const COVER_PALETTES: [string, string][] = [
@@ -176,12 +177,11 @@ export function BookCard({ book, gridSize, showBadges, showDetails, onPress }: C
       accessibilityRole="button"
       accessibilityLabel={book.title}
       onPress={() => onPress(book)}
-      style={({ pressed }) => [
+      className={pressFeedback} style={[
         styles.cardWrapper,
         {
           backgroundColor: isDark ? '#212125' : '#ffffff',
           borderColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
-          opacity: pressed ? 0.88 : 1,
         },
       ]}>
       <View style={styles.cardCoverFrame}>
@@ -250,7 +250,7 @@ export function BookRow({ book, position, onPress }: {
     <Pressable
       accessibilityRole="button"
       onPress={() => onPress(book)}
-      className="mb-2 flex-row items-center gap-4 rounded-xl border border-line bg-surface p-3.5 active:opacity-80">
+      className={`mb-2 flex-row items-center gap-4 rounded-xl border border-line bg-surface p-3.5 ${pressFeedback}`}>
       <View className="flex-1 min-w-0">
         <Text numberOfLines={2} className="font-ui text-tx text-base font-semibold">{book.title}</Text>
         <Text numberOfLines={1} className="font-ui text-mu text-sm mt-0.5">{book.author?.trim() || 'Unknown author'}</Text>

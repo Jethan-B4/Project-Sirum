@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAppTheme } from '@/theme/ThemeProvider';
 import { Icon } from '@/components/ui/icon';
+import { pressFeedback } from '@/components/ui/press-feedback';
 import type { ReaderChapter, SearchResult } from './types';
 
 import { searchBook } from './searchBook';
@@ -82,7 +83,7 @@ export function SearchOverlay({
             accessibilityRole="button"
             accessibilityLabel="Back"
             onPress={onClose}
-            className="w-11 h-11 items-center justify-center"
+            className={`w-11 h-11 items-center justify-center ${pressFeedback}`}
           >
             <Icon name="arrow-back" size={22} tone="default" />
           </Pressable>
@@ -100,7 +101,7 @@ export function SearchOverlay({
               accessibilityRole="button"
               accessibilityLabel="Clear search"
               onPress={() => setQuery('')}
-              className="w-11 h-11 items-center justify-center"
+              className={`w-11 h-11 items-center justify-center ${pressFeedback}`}
             >
               <Icon name="close" size={20} tone="muted" />
             </Pressable>
@@ -113,14 +114,14 @@ export function SearchOverlay({
               <Pressable
                 key={`${h}-${i}`}
                 onPress={() => setQuery(h)}
-                className="flex-row items-center gap-5 px-5 py-4"
+                className={`flex-row items-center gap-5 px-5 py-4 ${pressFeedback}`}
               >
                 <Icon name="time-outline" size={18} tone="muted" />
                 <Text className="font-ui text-tx text-[16px] flex-1">{h}</Text>
               </Pressable>
             ))}
             {history.length > 0 && (
-              <Pressable onPress={onClearHistory} className="px-5 py-4">
+              <Pressable onPress={onClearHistory}  className={`px-5 py-4 ${pressFeedback}`}>
                 <Text className="font-ui text-mu text-[13px]">Clear history</Text>
               </Pressable>
             )}
@@ -141,7 +142,7 @@ export function SearchOverlay({
                   onAddHistory(query.trim());
                   onResult(r);
                 }}
-                className="px-5 py-3.5 border-b border-line"
+                className={`px-5 py-3.5 border-b border-line ${pressFeedback}`}
               >
                 <Text className="font-ui text-tx text-[14px] leading-5">
                   {r.before}

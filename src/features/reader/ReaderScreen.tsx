@@ -1,9 +1,11 @@
 import { ReaderMotion, ReaderOverlay } from './ReaderOverlay';
 import { BookPassage, type LoadedChapter } from './BookPassage';
+import { LinkPreview } from './LinkPreview';
+import { createChapterCache } from './chapterCache';
 import type { Direction } from './useSwipeTurn';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { AccessibilityInfo, Alert, Animated, Easing, Linking, AppState, Pressable, Text, View, useWindowDimensions } from 'react-native';
+import { AccessibilityInfo, Animated, Easing, Linking, AppState, Pressable, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -13,6 +15,7 @@ import { useKeepAwake } from 'expo-keep-awake';
 
 import { AppBar, Screen, useChrome } from '@/components/chrome/app-bar';
 import { Icon, IconButton } from '@/components/ui/icon';
+import { pressFeedback } from '@/components/ui/press-feedback';
 import { bookmarks as bookmarksRepo } from '@/db/repositories/bookmarks';
 import { chapters as chaptersRepo } from '@/db/repositories/chapters';
 import { documents } from '@/db/repositories/documents';
@@ -27,7 +30,7 @@ import {
   type ReadingStyle,
 } from '@/lib/settingsKeys';
 import { chapterNavigation, readSupplement } from '@/formats/epub/navigationCache';
-import { resolveBookLink } from '@/text/links';
+import { linkedPassage, resolveBookLink } from '@/text/links';
 import { contrastText, linkColor } from '@/lib/color';
 import { chunkChapter } from '@/text/chunk';
 import { useAppTheme } from '@/theme/ThemeProvider';
@@ -45,8 +48,20 @@ import type { ReaderChapter, SearchResult } from './types';
 import type { BookmarkRow } from '@/db/repositories/bookmarks';
 import type { HighlightRow } from '@/db/repositories/highlights';
 import type { DocumentRow } from '@/db/repositories/documents';
+import { logger } from '@/lib/logger';
 
 type Overlay = 'none' | 'menu' | 'panel' | 'display' | 'search';
+type ResolvedBookLink = ReturnType<typeof resolveBookLink>;
+type LinkPopupState = {
+  label: string;
+  target: ResolvedBookLink;
+  preview: string;
+  offset?: number;
+  page?: LoadedChapter;
+  section?: Awaited<ReturnType<typeof readSupplement>>;
+  loading: boolean;
+  error?: string;
+};
 
 export default function ReaderScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -183,15 +198,30 @@ function BookReader({ id }: { id: string }) {
     return FileSystem.readAsStringAsync(doc?.text_dir + '/' + file);
   }, [doc?.text_dir]);
 
-  const loadChapter = useCallback(async (index: number) => {
-    const storedIndex = chs[index].chapter_index;
+  const chapterCache = useMemo(() => createChapterCache(async (index: number) => {
+    const row = chs[index];
+    if (!row) throw new Error('Chapter is not available.');
+    const storedIndex = row.chapter_index;
     const [text, presentation] = await Promise.all([
       readChapter(storedIndex),
       doc?.format === 'epub' && doc.local_uri && doc.text_dir
         ? chapterNavigation(doc.local_uri, doc.text_dir, chs, storedIndex).catch(() => null) : null,
     ]);
     return { index, text, nav: presentation };
-  }, [chs, doc, readChapter]);
+  }, page => doc?.format !== 'epub' || page.nav !== null), [chs, doc, readChapter]);
+  const loadChapter = chapterCache.load;
+
+  useEffect(() => {
+    chapterCache.focus(chIdx, loaded?.index === chIdx ? loaded : undefined);
+    if (loaded?.index !== chIdx) return;
+    for (const index of [chIdx - 1, chIdx + 1]) {
+      if (index >= 0 && index < chs.length) {
+        void loadChapter(index).catch((error) => {
+          logger.warn('Adjacent chapter preload failed', { error: String(error), index });
+        });
+      }
+    }
+  }, [chs.length, chIdx, loaded, chapterCache, loadChapter]);
 
   useEffect(() => {
     if (!ch || loaded?.index === chIdx) return;
@@ -233,7 +263,7 @@ function BookReader({ id }: { id: string }) {
   const [direction, setDirection] = useState(1);
   useEffect(() => () => { request.current++; }, []);
   const skipEntrance = useRef(false);
-  const jumpToChapter = useCallback(async (index: number, fraction = 0, prepared?: LoadedChapter) => {
+  const jumpToChapter = useCallback(async (index: number, fraction = 0, prepared?: LoadedChapter, swipeCompleted = false) => {
     const row = chs[index];
     if (!row) return;
     setScrub(null);
@@ -243,7 +273,7 @@ function BookReader({ id }: { id: string }) {
       const page = prepared ?? (loaded?.index === index ? loaded : await loadChapter(index));
       if (request.current !== ticket) return;
       setDirection(row.start_offset + offset < lastOffset.current || index < chIdx ? -1 : 1);
-      skipEntrance.current = !!prepared;
+      skipEntrance.current = swipeCompleted;
       setOverlay('none');
       setLoaded(page);
     } catch {
@@ -262,48 +292,77 @@ function BookReader({ id }: { id: string }) {
     section: Awaited<ReturnType<typeof readSupplement>>;
     path: string; offset: number; revision: number;
   } | null>(null);
+  const [linkPopup, setLinkPopup] = useState<LinkPopupState | null>(null);
+  const linkRequest = useRef(0);
   const supplementChunks = useMemo(() => chunkChapter(0, supplement?.section.text ?? '', 0,
     supplement?.section.navigation.images, supplement?.section.navigation.paragraphs), [supplement]);
-  function followLink(href: string) {
+  function closeLinkPopup() {
+    linkRequest.current++;
+    setLinkPopup(null);
+  }
+  async function followLink(href: string, label: string) {
     setOverlay('none');
     const source = supplementVisible && supplement ? '/' + supplement.path.split('/').map(encodeURIComponent).join('/') : ch?.source_href ?? '';
     const target = resolveBookLink(href, source, sources, nav?.packageDir);
-    if (target.kind === 'missing') {
-      Alert.alert('Link unavailable', target.address);
-      return;
-    }
-    const proceed = async () => {
-      if (target.kind === 'external') {
-        await Linking.openURL(target.address);
-        return;
-      }
+    const requestId = ++linkRequest.current;
+    setLinkPopup({ label, target, preview: '', loading: target.kind !== 'external' && target.kind !== 'missing' });
+    if (target.kind === 'external' || target.kind === 'missing') return;
+    try {
       if (target.kind === 'supplement') {
-        if (!doc?.local_uri || !doc.text_dir) throw Error();
-        const section = supplement?.path === target.path ? supplement.section : await readSupplement(doc.local_uri, target.path, doc.text_dir);
-        const offset = target.fragment ? section.navigation.anchors.find(([id]) => id === target.fragment)?.[1] : 0;
-        if (offset == null) throw Error();
-        setSupplement((previous) => ({ section, path: target.path, offset, revision: (previous?.revision ?? 0) + 1 }));
-        setSupplementVisible(true);
+        if (!doc?.local_uri || !doc.text_dir) throw new Error('The linked section is unavailable.');
+        const section = supplement?.path === target.path
+          ? supplement.section
+          : await readSupplement(doc.local_uri, target.path, doc.text_dir);
+        const offset = target.fragment
+          ? section.navigation.anchors.find(([id]) => id === target.fragment)?.[1]
+          : 0;
+        if (offset == null) throw new Error('The linked passage could not be found.');
+        if (linkRequest.current !== requestId) return;
+        setLinkPopup({ label, target, preview: linkedPassage(section.text, offset, section.navigation.paragraphs),
+          offset, section, loading: false });
         return;
       }
-      let offset = 0;
-      if (target.fragment) {
-        if (!doc?.local_uri || !doc.text_dir) throw Error();
-        const data = target.index === chIdx && nav ? nav :
-          await chapterNavigation(doc.local_uri, doc.text_dir, chs, chs[target.index].chapter_index);
-        const point = data.anchors.find(([id]) => id === target.fragment);
-        if (!point) throw Error();
-        offset = point[1];
+      const page = loaded?.index === target.index && loaded.nav ? loaded : await loadChapter(target.index);
+      const offset = target.fragment
+        ? page.nav?.anchors.find(([id]) => id === target.fragment)?.[1]
+        : 0;
+      if (offset == null) throw new Error('The linked passage could not be found.');
+      if (linkRequest.current !== requestId) return;
+      setLinkPopup({ label, target, preview: linkedPassage(page.text, offset, page.nav?.paragraphs),
+        page, offset, loading: false });
+    } catch {
+      if (linkRequest.current === requestId) {
+        setLinkPopup((current) => current && ({ ...current, loading: false, error: 'The linked passage is unavailable.' }));
       }
-      setSupplementVisible(false);
-      jumpToChapter(target.index, offset / (chs[target.index].char_count || 1));
-    };
-    Alert.alert(target.kind === 'external' ? 'Open external address?' : 'Go to this passage?',
-      target.address, [
-        { text: 'Cancel', style: 'cancel' },
-        { text: target.kind === 'external' ? 'Open' : 'Go to passage',
-          onPress: () => { void proceed().catch(() => toast('Link destination is unavailable')); } },
-      ], { cancelable: true });
+    }
+  }
+
+  async function openLinkDestination() {
+    const link = linkPopup;
+    if (!link || link.loading || link.error || link.target.kind === 'missing') return;
+    const requestId = linkRequest.current;
+    const destination = link.target;
+    const section = link.section;
+    const offset = link.offset;
+    try {
+      if (destination.kind === 'external') {
+        setLinkPopup({ ...link, loading: true });
+        await Linking.openURL(destination.address);
+        if (linkRequest.current !== requestId) return;
+      } else if (destination.kind === 'supplement' && section && offset != null) {
+        setSupplement((previous) => ({ section, path: destination.path, offset,
+          revision: (previous?.revision ?? 0) + 1 }));
+        setSupplementVisible(true);
+      } else if (destination.kind === 'internal' && offset != null) {
+        setSupplementVisible(false);
+        void jumpToChapter(destination.index, offset / (chs[destination.index].char_count || 1), link.page);
+      } else {
+        throw new Error('The linked passage is unavailable.');
+      }
+      closeLinkPopup();
+    } catch {
+      if (linkRequest.current === requestId) setLinkPopup({ ...link, loading: false, error: 'This link could not be opened.' });
+    }
   }
 
   const jumpToOffset = (offset: number) => {
@@ -464,12 +523,15 @@ function BookReader({ id }: { id: string }) {
     return get(SettingKeys.readerNextButton) && index + 1 < chs.length && (
       <View style={{ marginHorizontal: Math.max(16, marginH), paddingTop: 20, paddingBottom: 12, alignItems: 'flex-end' }}>
         <Pressable accessibilityRole="button" onPress={(event) => {
-        event.stopPropagation();
-        jumpToChapter(index + 1);
-      }} accessibilityLabel={'Next chapter, ' + (chs[index + 1].title ?? (index + 2))}
-        android_ripple={{ color: foreground + '28' }}
-        style={{ minHeight: 44, paddingHorizontal: 16, flexDirection: 'row', gap: 8, alignItems: 'center',
-          borderRadius: 22, overflow: 'hidden', borderWidth: 1, borderColor: foreground, backgroundColor: style.bg }}>
+          event.stopPropagation();
+          jumpToChapter(index + 1);
+        }} accessibilityLabel={'Next chapter, ' + (chs[index + 1].title ?? (index + 2))}
+          android_ripple={{ color: foreground + '28', borderless: false }}
+          className={pressFeedback} style={{
+            minHeight: 44, paddingHorizontal: 16, flexDirection: 'row', gap: 8, alignItems: 'center',
+            borderRadius: 22, overflow: 'hidden', borderWidth: 1, borderColor: foreground,
+            backgroundColor: style.bg,
+          }}>
           <Text style={{ color: foreground, fontWeight: '600' }}>Next chapter</Text>
           <Icon name="arrow-forward" size={16} tone={foreground} />
         </Pressable>
@@ -483,7 +545,7 @@ function BookReader({ id }: { id: string }) {
       const page = await loadChapter(index);
       return { view: <BookPassage {...passageProps(page)} page={page} initialOffset={atEnd ? page.text.length : 0}
         onMove={() => {}} onLink={() => {}} footer={nextButtonFor(index)} />,
-        commit: () => { void jumpToChapter(index, atEnd ? 1 : 0, page); } };
+        commit: () => { void jumpToChapter(index, atEnd ? 1 : 0, page, true); } };
     } catch { toast('This chapter could not be opened'); return null; }
   }
 
@@ -510,7 +572,7 @@ function BookReader({ id }: { id: string }) {
                   accessibilityRole="button"
                   accessibilityLabel="Display options"
                   onPress={() => setOverlay('display')}
-                  className="px-2 py-1">
+                  className={`px-2 py-1 ${pressFeedback}`}>
                   <Text className="font-ui text-tx text-[17px] font-semibold">
                     Aa
                   </Text>
@@ -541,7 +603,7 @@ function BookReader({ id }: { id: string }) {
                   if (icon === 'bookmark') void addBookmark();
                   if (icon === 'settings-outline') router.push({ pathname: '/settings', params: { from: 'reader' } });
                 }}
-                className="flex-row items-center gap-3 px-5 py-3.5">
+                className={`flex-row items-center gap-3 px-5 py-3.5 ${pressFeedback}`}>
                 <Icon name={icon} size={18} tone="default" />
                 <Text className="font-ui text-tx text-[15px]">{label}</Text>
               </Pressable>
@@ -647,26 +709,33 @@ function BookReader({ id }: { id: string }) {
 
       </View>
 
-      {supplement && (
-        <ReaderOverlay visible={supplementVisible} onClose={() => setSupplementVisible(false)}>
-          <Screen showNav={false}>
-            <View style={{ flex: 1, backgroundColor: style.bg }}>
-              <View className="flex-row items-center gap-2 px-3 py-2">
-                <Text numberOfLines={1} className="flex-1 font-ui font-semibold" style={{ color: style.tx }}>
-                  {supplement.section.firstHeading ?? supplement.path}
-                </Text>
-                <IconButton icon="close" label="Return to reading" tone={style.tx} onPress={() => setSupplementVisible(false)} />
+      <ReaderOverlay visible={!!linkPopup || supplementVisible}
+        onClose={linkPopup ? closeLinkPopup : () => setSupplementVisible(false)}>
+        {supplementVisible && supplement && (
+          <View style={{ flex: 1 }} pointerEvents={linkPopup ? 'none' : 'auto'}
+            accessibilityElementsHidden={!!linkPopup} importantForAccessibility={linkPopup ? 'no-hide-descendants' : 'auto'}>
+            <Screen showNav={false}>
+              <View style={{ flex: 1, backgroundColor: style.bg }}>
+                <View className="flex-row items-center gap-2 px-3 py-2">
+                  <Text numberOfLines={1} className="flex-1 font-ui font-semibold" style={{ color: style.tx }}>
+                    {supplement.section.firstHeading ?? supplement.path}
+                  </Text>
+                  <IconButton icon="close" label="Return to reading" tone={style.tx} onPress={() => setSupplementVisible(false)} />
+                </View>
+                <ChunkedChapter key={[supplement.revision, style.indentParagraphs, style.indentLength].join('/')} chunks={supplementChunks}
+                  linkText={supplement.section.text}
+                  publisherStyles={supplement.section.navigation.styles} paragraphs={supplement.section.navigation.paragraphs} mediaDir={doc?.text_dir}
+                  length={supplement.section.text.length} links={supplement.section.navigation.links}
+                  linkColor={linkColor(style.bg)} onLink={followLink} initialOffset={supplement.offset}
+                  margin={winWidth * style.mar / 100} textStyle={{ color: style.tx, fontFamily, fontSize, lineHeight: Math.round(fontSize * style.lh) }}
+                  indent={style.indentParagraphs ? style.indentLength : 0} onMove={() => {}} footer={null}>{null}</ChunkedChapter>
               </View>
-              <ChunkedChapter key={[supplement.revision, style.indentParagraphs, style.indentLength].join('/')} chunks={supplementChunks}
-                publisherStyles={supplement.section.navigation.styles} paragraphs={supplement.section.navigation.paragraphs} mediaDir={doc?.text_dir}
-                length={supplement.section.text.length} links={supplement.section.navigation.links}
-                linkColor={linkColor(style.bg)} onLink={followLink} initialOffset={supplement.offset}
-                margin={winWidth * style.mar / 100} textStyle={{ color: style.tx, fontFamily, fontSize, lineHeight: Math.round(fontSize * style.lh) }}
-                indent={style.indentParagraphs ? style.indentLength : 0} onMove={() => {}} footer={null}>{null}</ChunkedChapter>
-            </View>
-          </Screen>
-        </ReaderOverlay>
-      )}
+            </Screen>
+          </View>
+        )}
+        {linkPopup && <LinkPreview label={linkPopup.label} target={linkPopup.target} preview={linkPopup.preview}
+          loading={linkPopup.loading} error={linkPopup.error} onClose={closeLinkPopup} onOpen={openLinkDestination} />}
+      </ReaderOverlay>
 
       {/* In-book search with history */}
       <SearchOverlay
@@ -690,11 +759,12 @@ function BookReader({ id }: { id: string }) {
               Progress display.
             </Text>
             <View className="flex-row justify-end mt-4 gap-2">
-              <Pressable className="px-4 py-2 rounded-full" onPress={() => { setPmDismissed(true); void set(SettingKeys.readerPercentageMode, 'chapter'); }}>
+              <Pressable className={`px-4 py-2 rounded-full ${pressFeedback}`}
+                onPress={() => { setPmDismissed(true); void set(SettingKeys.readerPercentageMode, 'chapter'); }}>
                 <Text className="font-ui text-accent font-semibold">Current chapter</Text>
               </Pressable>
               <Pressable
-                className="px-4 py-2 rounded-full"
+                className={`px-4 py-2 rounded-full ${pressFeedback}`}
                 style={{ backgroundColor: accent.hex }}
                 onPress={() => { setPmDismissed(true); void set(SettingKeys.readerPercentageMode, 'book'); }}>
                 <Text className="font-ui font-semibold" style={{ color: contrastText(accent.hex) }}>Whole book</Text>

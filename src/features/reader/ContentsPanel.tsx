@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAppTheme } from '@/theme/ThemeProvider';
 import { contrastText } from '@/lib/color';
 import { Icon, type IconName } from '@/components/ui/icon';
+import { pressFeedback } from '@/components/ui/press-feedback';
 import type { BookmarkRow } from '@/db/repositories/bookmarks';
 import type { HighlightRow } from '@/db/repositories/highlights';
 import type { ReaderChapter } from './types';
@@ -99,7 +100,7 @@ export function ContentsPanel({
           {/* Tab bar */}
           <View className="flex-row border-b border-line pt-3">
             <Pressable accessibilityRole="button" accessibilityLabel="Close contents" onPress={onClose}
-              className="items-center justify-center px-3"><Icon name="close" size={20} /></Pressable>
+              className={`items-center justify-center px-3 ${pressFeedback}`}><Icon name="close" size={20} /></Pressable>
             {TABS.map(([key, icon, label]) => {
               const on = tab === key;
               return (
@@ -109,7 +110,7 @@ export function ContentsPanel({
                   accessibilityLabel={label}
                   accessibilityState={{ selected: on }}
                   onPress={() => setTab(key)}
-                  className="flex-1 items-center pb-2 border-b-[3px]"
+                  className={`flex-1 items-center pb-2 border-b-[3px] ${pressFeedback}`}
                   style={{ borderBottomColor: on ? accent.hex : 'transparent' }}>
                   <Icon name={icon} size={20} tone={on ? 'default' : 'muted'} />
                 </Pressable>
@@ -131,7 +132,7 @@ export function ContentsPanel({
                       onClose();
                       onJumpChapter(i);
                     }}
-                    className="px-6 justify-center"
+                    className={`px-6 justify-center ${pressFeedback}`}
                     style={{ height: rowHeight, backgroundColor: on ? accent.hexStrong : undefined }}>
                     <Text
                       numberOfLines={2}
@@ -155,7 +156,7 @@ export function ContentsPanel({
                   return (
                     <View key={h.id} className="px-6 py-3.5">
                       <Pressable
-                        className="flex-row items-start gap-3"
+                        className={`flex-row items-start gap-3 ${pressFeedback}`}
                         onPress={() => {
                           onClose();
                           onJumpOffset(h.start_offset);
@@ -181,7 +182,7 @@ export function ContentsPanel({
                         accessibilityRole="button"
                         accessibilityLabel="Delete highlight"
                         onPress={() => onDeleteHighlight(h.id)}
-                        className="absolute top-3 right-4 p-1">
+                        className={`absolute top-3 right-4 p-1 ${pressFeedback}`}>
                         <Icon name="trash-outline" size={16} tone="muted" />
                       </Pressable>
                     </View>
@@ -200,7 +201,7 @@ export function ContentsPanel({
                   return (
                     <View key={b.id} className="flex-row items-center">
                       <Pressable
-                        className="flex-1 px-6 py-3.5"
+                        className={`flex-1 px-6 py-3.5 ${pressFeedback}`}
                         onPress={() => {
                           onClose();
                           onJumpChapter(b.chapter_index, frac);
@@ -216,7 +217,7 @@ export function ContentsPanel({
                         accessibilityRole="button"
                         accessibilityLabel="Delete bookmark"
                         onPress={() => onDeleteBookmark(b.id)}
-                        className="p-2 mr-2">
+                        className={`p-2 mr-2 ${pressFeedback}`}>
                         <Icon name="trash-outline" size={16} tone="muted" />
                       </Pressable>
                     </View>
