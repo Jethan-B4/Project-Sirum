@@ -7,6 +7,7 @@ import {
   type SettingKey,
   type SettingValues,
 } from '@/lib/settingsKeys';
+import { logger } from '@/lib/logger';
 
 interface SettingsContextValue {
   /** False until the initial load from SQLite completes. */
@@ -43,7 +44,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         setReady(true);
       })
       .catch((err) => {
-        console.error('Failed to load settings', err);
+        logger.error('Failed to load settings', err);
         if (!cancelled) setReady(true);
       });
     return () => {

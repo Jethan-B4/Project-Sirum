@@ -2,6 +2,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Crypto from 'expo-crypto';
 import * as SQLite from 'expo-sqlite';
 import { migrations } from './migrations';
+import { logger } from '@/lib/logger';
 
 const DB_NAME = 'reader.db';
 
@@ -25,7 +26,7 @@ async function init(): Promise<SQLite.SQLiteDatabase> {
   await db.execAsync('PRAGMA foreign_keys = ON;');
   await runMigrations(db);
   await ensureDeviceId(db);
-  await recoverInterruptedImports(db).catch((error) => console.warn('Import recovery deferred', error));
+  await recoverInterruptedImports(db).catch((error) => logger.warn('Import recovery deferred', { error: String(error) }));
   return db;
 }
 

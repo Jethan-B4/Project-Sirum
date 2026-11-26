@@ -2,7 +2,7 @@
 
 Tracks implementation status against `offline-reader-dev-plan.md`. Update this file as milestones complete.
 
-**Last updated:** 2026-11-25
+**Last updated:** 2026-11-26
 
 ---
 
@@ -17,10 +17,19 @@ Tracks implementation status against `offline-reader-dev-plan.md`. Update this f
 | Phase 4: Supabase backend | 🟡 Partial | Migrations written (`supabase/migrations/`); not verified against a live project |
 | Phase 5: Google auth | ⬜ Not started | `expo-secure-store`, supabase-js installed; no native sign-in yet |
 | Phase 6: Sync engine | ⬜ Not started | Schema supports it; no push/pull code |
-| Phase 7: Testing & hardening | Partial | Reader, link extraction, import recovery and large-book search regressions covered. Physical-device profiling remains open. |
-| Phase 8: Polish & release | Partial | Adaptive Library and reader controls implemented. Production package size check in place. |
+| Phase 7: Testing & hardening | Partial | Reader, link extraction, import recovery and large-book search regressions covered. Production crash logger with sensitive-data sanitization active. Physical-device profiling, archive limits, and secure session storage remain open. |
+| Phase 8: Polish & release | 🟢 Advanced | Adaptive Library, reader controls, confirmed library delete with undo, first-run offline onboarding, and screen reader accessibility implemented. Production package size check in place. Backup disclosure and store privacy requirements are still open. |
 
 Legend: ✅ done · 🟢 advanced / nearly done · 🟡 partial · ⬜ not started
+
+## Library deletion with undo, onboarding, accessibility & crash logging (2026-11-26)
+
+- **Library delete action with undo (plan 5.9):** Long-pressing any book card or list row opens a confirmation modal ("Remove from library?"). Confirming invokes `documents.softDelete(id)` and raises a 5-second toast with an **Undo** action. Tapping **Undo** invokes `documents.restore(id)` to immediately restore the book without re-import. Book files remain on device during the undo window and are retained until sync can commit the tombstone.
+- **Undo for bookmarks and highlights:** Deleting a bookmark or highlight in the reader's `ContentsPanel` and selection popup now triggers an undoable toast. Tapping **Undo** executes `bookmarks.restore(id)` or `highlights.restore(id)` to restore the record and refreshes the annotations list.
+- **First-run offline onboarding:** On initial launch (`device.onboardingSeen = false`), a modal welcomes users and highlights Sirum's three pillars: 100% offline-by-default reading, optional sign-in (exclusively for multi-device sync), and zero tracking or reading surveillance. Tapping **Get Started** sets `device.onboardingSeen = true` and transitions cleanly to the library, gracefully sequencing before the ask-once library order prompt.
+- **Screen reader accessibility:** `BookCard` and `BookRow` now announce comprehensive accessibility labels (`"${title}, by ${author}, ${format} format, ${progress}% read${remoteText}"`) and provide `accessibilityHint` for tap-to-read and double-tap-and-hold options, resolving the gap where screen readers announced titles only.
+- **Production crash logging & data sanitization:** `src/lib/logger.ts` implements a ring buffer of 50 breadcrumbs for production crash reporting (`getCrashBreadcrumbs()`). A recursive `sanitize()` utility redacts sensitive data (local file URIs, book text, snippets, passages, notes, and authentication tokens) to guarantee that future crash reporting cannot leak user books or credentials. Replaced unhandled `console.error` and `console.warn` calls with `logger.error` and `logger.warn`.
+- **Validation:** All 24 regression tests pass in Node. TypeScript (`npx tsc --noEmit`) and ESLint (`npx eslint`) pass with zero errors.
 
 ## Reader text selection, highlights and notes (2026-11-25)
 
@@ -367,7 +376,40 @@ The screens, layout, and interactions from `sirum-ui-prototype.html` are impleme
 ### Immediate (Phase 3 remaining)
 
 1. **Page boundaries.** Profile viewport turns in heavily illustrated chapters. Exact line-aligned pagination and physical-device frame measurements remain open.
-2. **PDF importer** — `react-native-webview` + pdf.js spike per plan 5.4.
+2. **PDF importer** — `react-native-webview` + pdf.js spike per plan 5.4. Keep the WebView offline, local-asset only, and unable to reach the book directory.
 3. **Native text-selection verification** — verify selection handles, custom popup coexistence, copy/share targets, and text hit-testing on Android and iOS.
 4. **Reactive reads** — repository change notifications so library updates without focus reloads (plan 4.6).
 5. **Large-book device profiling** check restore, chapter transitions, search jumps, peak memory and long flings on Android and iOS, including a 500+ page EPUB and a single-chapter TXT.
+6. **Remove from library.** `documents.softDelete` exists, but the library has no delete action. Add a confirmed delete with undo, then remove local files only after the tombstone can sync (plan 5.9).
+7. **Import limits.** Cap uncompressed EPUB size, reject archive paths that escape the package, and disable XML entity expansion (see the review below).
+
+### Practice and security review (2026-11-26)
+
+Reviewed against common reader-app behavior (library management, reading controls, store privacy) and against local-data risks for an app that stores other people's books. The reader already does several of the important things: book HTML is parsed to text instead of loaded in a WebView, external links require an explicit open after the address is shown, `javascript:` and other non-web schemes are rejected in `resolveBookLink`, queries use bound parameters, progress writes do not mark a book dirty on open, and the Supabase SQL enables RLS, omits delete policies, and revokes the anon role.
+
+**Do before sync or a store build**
+
+| Item | Why |
+|---|---|
+| Session storage | `src/auth/supabase.ts` persists the Supabase session in AsyncStorage. That store is unencrypted and is included in a normal device backup. `expo-secure-store` is already installed. Move the session to the platform keystore, chunking if a token exceeds the SecureStore size limit. |
+| Device backup | Book files, chapter text, notes, and `reader.db` live in the app documents directory. Android Auto Backup and iOS backup copy that directory by default, so "books stay on this device" is not yet true of a Google or iCloud backup. Exclude `books/` and the database, or say so in About and the privacy policy. |
+| Archive safety | `archivePath` strips a leading slash but still accepts `..` segments. `unzipSync` inflates a whole EPUB with no uncompressed-size cap, so a small zip can exhaust memory. Reject absolute paths, `..`, NUL bytes, and duplicate names. Stop inflating past a fixed per-entry and total budget. |
+| EPUB XML | `XMLParser` is created with attribute parsing only. fast-xml-parser still expands entities by default. Disable entity processing and reject documents that contain a `DOCTYPE`. |
+| Column updates | `documents.update` copies object keys into SQL identifiers. Highlights already allowlist `color` and `note`. Use the same allowlist for documents before sync applies remote rows. |
+| SVG illustrations | `isPublicationAsset` caches `.svg` and the reader displays those files with `expo-image`. Keep illustrations to PNG, JPEG, GIF, and WebP. Do not render publisher SVG or HTML in a WebView. |
+| External links | The scheme allowlist is in place. Also drop URLs that contain credentials (`user:pass@host`) and show the host in the preview, not only the full address. |
+| PDF WebView | When PDF extraction starts, load pdf.js from the app bundle only. Disable navigation, remote URLs, and file access outside the chosen PDF. |
+| Auth, when it starts | Use the system browser and PKCE. Allow only the app's redirect URI. Do not log tokens, snippets, or file paths. Account deletion has to exist before store submission (plan 10.2). Ship no service-role key. |
+| Missing config | The Supabase client is constructed even when `EXPO_PUBLIC_SUPABASE_URL` or the anon key is empty. Fail closed until both are set, and keep using a separate project for production. |
+
+**Reader and library behavior worth refining**
+
+| Item | Why | Status |
+|---|---|---|
+| Delete a book | Planned in 5.9 and implemented in the repository, missing in the library UI. One-tap bookmark and highlight deletion also has no undo. | ✅ Resolved (long-press delete dialog + 5s undo toast; bookmark/highlight restore) |
+| Onboarding | First launch does not explain that reading is offline and that sign-in is optional. About already states the privacy split; the first-run screen should say the same thing before anyone imports a library. | ✅ Resolved (first-run onboarding modal with offline & privacy pillars) |
+| Accessibility | Many controls have roles and labels. Book cards announce the title only, so author and progress are invisible to a screen reader. Confirm text at the largest system size still scrolls inside the Aa sheet, settings, and the order prompt. | 🟢 Resolved for book cards & rows (comprehensive title/author/format/progress/local labels + accessibility hints) |
+| Touch and motion | Chapter turns and deletes have no haptic confirmation. System Reduce Motion is already honored. Keep new motion on the native driver and skip it when Reduce Motion is on. | Open |
+| Link and share copy | Copy and share are user-initiated, which is the right default. Do not put passage text on the clipboard any other way. | Open |
+| Production failures | `logger` prints only in development, so a release crash or a failed import leaves no record. Add a crash reporter later that drops book text, paths, notes, and tokens. | ✅ Resolved (`src/lib/logger.ts` 50-breadcrumb ring buffer + recursive `sanitize()` redacting paths/text/tokens/notes) |
+| CI | Lint, `tsc`, and the reader regression script are local. Run them on every change before sync code lands (plan 9.5 and 9.8). | Open |

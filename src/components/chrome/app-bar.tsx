@@ -120,9 +120,14 @@ export function BottomNav() {
 
 // --- Chrome context (drawer + toast live at the root) ------------------------
 
+export interface ToastAction {
+  label: string;
+  onPress: () => void;
+}
+
 interface ChromeContextValue {
   openDrawer(): void;
-  toast(message: string): void;
+  toast(message: string, action?: ToastAction, durationMs?: number): void;
 }
 
 const ChromeContext = React.createContext<ChromeContextValue>({
@@ -136,13 +141,13 @@ export function useChrome(): ChromeContextValue {
 
 export function ChromeProvider({ children }: { children: React.ReactNode }) {
   const [drawerOpen, setDrawerOpen] = React.useState(false);
-  const [toastMsg, setToastMsg] = React.useState<string | null>(null);
+  const [toastData, setToastData] = React.useState<{ message: string; action?: ToastAction } | null>(null);
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const toast = React.useCallback((message: string) => {
-    setToastMsg(message);
+  const toast = React.useCallback((message: string, action?: ToastAction, durationMs = 2800) => {
+    setToastData({ message, action });
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setToastMsg(null), 2200);
+    timer.current = setTimeout(() => setToastData(null), durationMs);
   }, []);
 
   React.useEffect(() => () => {
@@ -153,10 +158,48 @@ export function ChromeProvider({ children }: { children: React.ReactNode }) {
     <ChromeContext.Provider value={{ openDrawer: () => setDrawerOpen(true), toast }}>
       {children}
       <SideDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
-      {toastMsg ? (
-        <View className="absolute left-4 right-4 bottom-20 z-10">
-          <View className="bg-[#e8e8ec] rounded-xl px-4 py-3">
-            <Text className="font-ui text-[#111111]">{toastMsg}</Text>
+      {toastData ? (
+        <View pointerEvents="box-none" style={{ position: 'absolute', left: 16, right: 16, bottom: 84, zIndex: 999 }}>
+          <View style={{
+            backgroundColor: '#1f1f24',
+            borderRadius: 14,
+            paddingVertical: 12,
+            paddingHorizontal: 16,
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            borderWidth: 1,
+            borderColor: '#32323c',
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.35,
+            shadowRadius: 8,
+            elevation: 8,
+          }}>
+            <Text style={{ color: '#ffffff', fontSize: 14, flex: 1, marginRight: 12 }} numberOfLines={2}>
+              {toastData.message}
+            </Text>
+            {toastData.action && (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={toastData.action.label}
+                onPress={() => {
+                  const act = toastData.action;
+                  setToastData(null);
+                  act?.onPress();
+                }}
+                hitSlop={8}
+                style={{
+                  paddingVertical: 6,
+                  paddingHorizontal: 12,
+                  borderRadius: 8,
+                  backgroundColor: 'rgba(255,255,255,0.14)',
+                }}>
+                <Text style={{ color: '#60a5fa', fontWeight: '700', fontSize: 13.5 }}>
+                  {toastData.action.label}
+                </Text>
+              </Pressable>
+            )}
           </View>
         </View>
       ) : null}

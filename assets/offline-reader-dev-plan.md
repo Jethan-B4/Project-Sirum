@@ -33,14 +33,15 @@
 
 Implementation tracking lives in `development-progress.md`. Compared with this plan, the project is further along in Phase 3 and has some differences:
 
-- **Built and working:** TXT and EPUB import and reading, library (grid/list, filters, order modes), history, import (manual picker and Android folder scan), the categorized settings hub, app themes and fonts, per-book reading style, ask-once prompts, progress save and restore, and the reader screen with the Aa sheet and text annotations.
+- **Built and working:** TXT and EPUB import and reading, library (grid/list, filters, order modes, confirmed delete with undo), history, import (manual picker and Android folder scan), first-run onboarding modal, categorized settings hub, app themes and fonts, per-book reading style, ask-once prompts, progress save and restore, reader screen with Aa sheet, text annotations, bookmark/highlight undo, screen-reader accessibility labels, and production crash logging with sensitive-data sanitization.
 - **Differences from the plan:** styling uses NativeWind v4 with CSS-variable theme tokens; routes live in `src/app/`, shared UI in `src/components/`, theming in `src/theme/`, and settings in `src/features/settings/` (see 3.2). Import stages files through a multi-strategy helper (5.1).
 - **Reader and import updates:** Contents, bookmarks, in-book search, cover normalization and import reports are implemented. Books open at the selected chapter and render a moving window of text chunks. Interrupted imports can be retried, and repeat imports can repair a legacy cover.
 - **Adaptive interface.** Library categories show labels and counts, including zero, in both themes. The grid responds to viewport width and text scale. Portrait and landscape layouts use safe-area insets. History supports a local title, author and chapter search alongside its own filters and ordering.
 - **Links in the reader.** EPUB labels retain their link ranges and target anchors in normalized chapter text. TXT web addresses are also actionable. Tapping a link opens a themed preview of its complete linked passage (or external address), with explicit choices to continue reading, open the link, or navigate to the passage. Linked EPUB footnotes outside the chapter sequence open separately.
 - **Navigation responsiveness.** Adjacent chapters are preloaded for faster swipes and chapter jumps. Standard stack navigation does not animate through an intermediate screen, avoiding the previous transition flash. Shared app controls provide consistent pressed-state feedback.
 - **Release checks.** Run `npm run check:package-size -- <package-path>` on each production binary. The production EAS success hook runs the same check. Exercise a 500+ page book in a release build on a lower-end phone, including continuous scrolling, chapter jumps, search and rotation. Record frame timing and memory alongside release package size.
-- **Remaining work:** Device performance measurements, line-aligned page boundaries, PDF extraction, reactive repository reads, Google sign-in and sync. The Supabase SQL still needs live verification.
+- **Remaining work:** Device performance measurements, line-aligned page boundaries, PDF extraction, reactive repository reads, library delete, Google sign-in and sync. The Supabase SQL still needs live verification.
+- **Security and product review (2026-11-26):** see `development-progress.md` and sections 9.5 and 9.8. Highest priority before sync or a store build: keystore session storage, exclude books and the database from OS backup (or disclose it), EPUB unzip limits and path checks, no XML entity expansion, and an allowlist for `documents.update` column names.
 
 ---
 
@@ -54,7 +55,7 @@ Implementation tracking lives in `development-progress.md`. Compared with this p
 6. [Phase 4: Supabase Backend](#6-phase-4-supabase-backend)
 7. [Phase 5: Authentication (Google OAuth)](#7-phase-5-authentication-google-oauth)
 8. [Phase 6: Sync Engine](#8-phase-6-sync-engine)
-9. [Phase 7: Testing and Hardening](#9-phase-7-testing-and-hardening)
+9. [Phase 7: Testing and Hardening](#9-phase-7-testing-and-hardening) (includes [9.8 Local reader security](#98-local-reader-security))
 10. [Phase 8: Polish and Release](#10-phase-8-polish-and-release)
 11. [Risks and Pitfalls](#11-risks-and-pitfalls)
 12. [Suggested Milestones](#12-suggested-milestones)
@@ -1308,6 +1309,9 @@ Collect real files covering: EPUB 2 and EPUB 3; nested TOC; no TOC; TOC pointing
 - Confirm there is no way to access tables with the anon (unauthenticated) key.
 - Confirm no service role key is in the app bundle.
 - Review RLS with Supabase's security advisor/linter in the dashboard.
+- A crafted EPUB cannot write outside its book directory, expand past the unzip budget, or expand XML entities.
+- The release bundle contains no session token, and a device backup of the app does not include `books/` or `reader.db` unless the privacy text says that it does.
+- Sign-in uses PKCE and rejects any redirect other than the app's URI. Logs from a failed sync contain no access token, note text, or chapter text.
 
 ### 9.6 Performance tests
 - Import and open large EPUBs and TXT files (10 MB, 50 MB, and pathological single-line files).
@@ -1320,6 +1324,31 @@ Collect real files covering: EPUB 2 and EPUB 3; nested TOC; no TOC; TOC pointing
 ### 9.7 Device and OS matrix
 - Multiple Android versions and manufacturers (file picker and permissions behave differently)
 - iOS versions, iPhone and iPad if supported
+- Largest system text size and a screen reader pass on Library, Import, Reader, and Settings
+- Reduce Motion on, and a confirmation that chapter-turn animation is skipped
+
+### 9.8 Local reader security
+
+These are local-data rules for an app that stores books, notes, and (later) an account. They sit beside the server checks in 9.5. The 2026-11-26 review found the current gaps; track completion in `development-progress.md`.
+
+**Already in good shape.** Chapter HTML is converted to text and publisher ranges. It is not loaded in a WebView. `resolveBookLink` allows only `http`, `https`, `mailto`, and `tel`, and the reader shows the address before `Linking.openURL`. SQL values are bound parameters. `touchOpened` does not set `dirty`. Server migrations enable RLS, grant no deletes, and revoke `anon`.
+
+**Archive and markup**
+- Normalize each zip entry, then reject absolute paths, `..`, backslash traversal, NUL bytes, and a second entry that normalizes to the same name.
+- Cap compressed input, uncompressed bytes per entry, and uncompressed bytes per book. Abort the import and delete the partial directory when a cap is hit.
+- Parse OPF, NCX, and `encryption.xml` with entity expansion off, and reject a `DOCTYPE`.
+- Store illustrations only as PNG, JPEG, GIF, or WebP under generated file names. Do not display publisher SVG or HTML.
+- The PDF extractor (5.4) runs pdf.js from bundled files in a WebView that cannot navigate, load a remote URL, or read the book directory.
+
+**Secrets and backups**
+- Persist the Supabase session in the platform keystore (`expo-secure-store` is already a dependency). Chunk values that exceed the platform limit. Do not leave refresh tokens in AsyncStorage.
+- Exclude the books directory and `reader.db` from Android Auto Backup and iOS backup, or describe that copy in the privacy policy and About. The current About line says books never leave the device, which is stronger than OS backup behavior.
+- Construct the Supabase client only when the URL and anon key are both non-empty. Production uses a different project from development.
+- Google sign-in (Phase 5) uses the system browser and PKCE, with a single redirect URI. Account deletion ships before release (10.2).
+
+**Data writes**
+- `documents.update` must allowlist column names the way `highlights.update` allowlists `color` and `note`. Sync must not pass remote keys straight into SQL text.
+- Library delete uses the existing `softDelete`, confirms first, offers undo, and removes local files only once the tombstone is safe to drop (5.9).
 
 ---
 
@@ -1390,6 +1419,13 @@ Collect real files covering: EPUB 2 and EPUB 3; nested TOC; no TOC; TOC pointing
 | Session lost when offline | Don't sign out on network errors; only on explicit auth failures |
 | Missing RLS on a new table | Enable RLS in every migration; use the Supabase linter; CI check |
 | Service role key leaked in the app | Only the anon key in the client; privileged work in Edge Functions |
+| Refresh token stored in AsyncStorage and included in backups | Keystore-backed session storage (9.8) |
+| OS backup copies books, notes, and `reader.db` | Exclude those paths from backup, or disclose the copy in the privacy policy |
+| Zip bomb or `../` entry during EPUB import | Uncompressed-size caps and rejected traversal paths (9.8) |
+| XML entity expansion in OPF or encryption metadata | Disable entities and reject `DOCTYPE` |
+| `documents.update` interpolates column names | Allowlist columns before sync applies remote patches |
+| SVG or a PDF WebView executes publisher content | Raster images only; pdf.js WebView stays offline and sandboxed |
+| External URL hides its host or carries credentials | Show the host and refuse userinfo before `Linking.openURL` |
 | User switches accounts on one device | Track `user_id` in `sync_state`; prompt and clear/merge deliberately |
 | Tombstones resurrect deleted data | Keep tombstones long enough; purge conservatively |
 | Over-engineering sync early | Ship the offline reader first; add sync after the local layer is stable |
@@ -1406,7 +1442,7 @@ Collect real files covering: EPUB 2 and EPUB 3; nested TOC; no TOC; TOC pointing
 | **M3** | Text model and TXT slice | ✅ Done | Add position-math and normalization tests. |
 | **M4** | **EPUB reader (primary)** | 🟢 Advanced | Import, covers, TOC, library, settings, per-book style, and progress are done. Windowed rendering, import recovery and legacy cover repair implemented. Device profiling and extraction golden files remain. |
 | **M4b** | **Reader screen parity** | Partial | Contents panel, display popup, incremental search and scrubber implemented. Viewport page turns are implemented. Exact line-aligned pagination remains open. |
-| **M5** | PDF and annotations | ⬜ Not started | pdf.js extraction spike; highlight and note UI and storage. |
+| **M5** | PDF and annotations | 🟡 Partial | Highlight styling, notes, and the annotation list are implemented. PDF extraction has not started. |
 | **M6** | Backend | 🟡 Partial | SQL is written. Verify RLS, triggers, and the cross-user test against the live project. |
 | **M7** | Google sign-in | ⬜ Not started | EAS development build, sign in and out, optional-auth flows. |
 | **M8** | Sync v1 | ⬜ Not started | Push/pull, "Not on this device", status UI, two-device test. |

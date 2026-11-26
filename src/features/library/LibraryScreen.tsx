@@ -13,6 +13,7 @@ import { documents, type LibraryDocument } from '@/db/repositories/documents';
 import { useSettings } from '@/features/settings/SettingsProvider';
 import { type AppTheme, useAppTheme } from '@/theme/ThemeProvider';
 import { contrastText } from '@/lib/color';
+import { logger } from '@/lib/logger';
 import {
   SettingKeys,
   type DocumentFormat,
@@ -54,6 +55,7 @@ export default function LibraryScreen() {
   const sort = get(SettingKeys.librarySort);
   const sortDirection = get(SettingKeys.librarySortDirection);
   const filters = get(SettingKeys.libraryFilters);
+  const onboardingSeen = get(SettingKeys.deviceOnboardingSeen);
 
   const [tab, setTab] = useState<'all' | DocumentFormat>('all');
   const [search, setSearch] = useState('');
@@ -64,6 +66,10 @@ export default function LibraryScreen() {
   const [orderPrompt, setOrderPrompt] = useState(false);
   const [orderPromptDismissed, setOrderPromptDismissed] = useState(false);
   const [alwaysUseChoice, setAlwaysUseChoice] = useState(true);
+  const [onboardingDismissed, setOnboardingDismissed] = useState(false);
+  const [bookToDelete, setBookToDelete] = useState<LibraryDocument | null>(null);
+
+  const showOnboarding = !onboardingSeen && !onboardingDismissed;
 
   // Deep link from the side drawer: /?tab=epub
   const [tabParam, setTabParam] = useState(params.tab);
@@ -100,15 +106,15 @@ export default function LibraryScreen() {
     setFormatCounts(counts);
 
     // Ask-once library order prompt (plan 5.9): two or more books, no stored choice.
-    if (counts.all >= 2 && !has(SettingKeys.libraryOrderMode) && !orderPromptDismissed) {
+    if (counts.all >= 2 && !has(SettingKeys.libraryOrderMode) && !orderPromptDismissed && onboardingSeen) {
       setOrderPrompt(true);
     }
-  }, [tab, search, orderMode, sort, sortDirection, filters, has, orderPromptDismissed]);
+  }, [tab, search, orderMode, sort, sortDirection, filters, has, orderPromptDismissed, onboardingSeen]);
 
   useFocusEffect(
     useCallback(() => {
       let focused = true;
-      load(() => focused).catch((e) => console.error('Library load failed', e));
+      load(() => focused).catch((e) => logger.error('Library load failed', e));
       return () => { focused = false; };
     }, [load])
   );
@@ -135,6 +141,37 @@ export default function LibraryScreen() {
     },
     [alwaysUseChoice, set]
   );
+
+  const dismissOnboarding = useCallback(async () => {
+    setOnboardingDismissed(true);
+    await set(SettingKeys.deviceOnboardingSeen, true);
+    if (books.length >= 2 && !has(SettingKeys.libraryOrderMode) && !orderPromptDismissed) {
+      setOrderPrompt(true);
+    }
+  }, [books.length, has, orderPromptDismissed, set]);
+
+  const confirmDeleteBook = useCallback(async () => {
+    if (!bookToDelete) return;
+    const target = bookToDelete;
+    setBookToDelete(null);
+    try {
+      await documents.softDelete(target.id);
+      load(() => true).catch(() => {});
+      toast(
+        `Removed “${target.title}”`,
+        {
+          label: 'Undo',
+          onPress: async () => {
+            await documents.restore(target.id);
+            load(() => true).catch(() => {});
+          },
+        },
+        5000
+      );
+    } catch {
+      toast('Failed to remove book');
+    }
+  }, [bookToDelete, load, toast]);
 
   const header = findOpen ? (
     <View style={styles.searchHeader}>
@@ -239,7 +276,13 @@ export default function LibraryScreen() {
         <FlatList
           data={books}
           keyExtractor={(b) => b.id}
-          renderItem={({ item }) => <BookRow book={item} onPress={openBook} />}
+          renderItem={({ item }) => (
+            <BookRow
+              book={item}
+              onPress={openBook}
+              onLongPress={(b) => setBookToDelete(b)}
+            />
+          )}
           contentContainerStyle={styles.listContent}
         />
       ) : (
@@ -258,6 +301,7 @@ export default function LibraryScreen() {
                 showBadges={showBadges}
                 showDetails={showDetails}
                 onPress={openBook}
+                onLongPress={(b) => setBookToDelete(b)}
               />
             </View>
           )}
@@ -272,6 +316,157 @@ export default function LibraryScreen() {
         sort={sort}
         sortDirection={sortDirection}
       />
+
+      {/* Delete book confirmation dialog */}
+      <Modal
+        supportedOrientations={['portrait', 'landscape']}
+        visible={bookToDelete != null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setBookToDelete(null)}>
+        <View style={styles.modalOverlay}>
+          <View
+            style={[
+              styles.modalBox,
+              {
+                backgroundColor: isDark ? '#1d1d22' : '#ffffff',
+                borderColor: isDark ? '#32323c' : '#e4e4ec',
+              },
+            ]}>
+            <View style={styles.modalHeaderRow}>
+              <View style={[styles.modalIconBox, { backgroundColor: isDark ? '#3d2024' : '#fee2e2' }]}>
+                <Icon name="trash-outline" size={20} tone="#ef4444" />
+              </View>
+              <Text style={[styles.modalTitle, { color: isDark ? '#ffffff' : '#18181b' }]}>
+                Remove from library?
+              </Text>
+            </View>
+
+            <Text style={[styles.modalBody, { color: isDark ? '#a0a0ab' : '#555562' }]}>
+              Are you sure you want to remove <Text style={{ fontWeight: '700', color: isDark ? '#ffffff' : '#111111' }}>“{bookToDelete?.title}”</Text>? Your reading progress and notes will remain intact if you re-import later.
+            </Text>
+
+            <View style={styles.modalActions}>
+              <Pressable
+                className={pressFeedback}
+                style={[
+                  styles.modalGhostButton,
+                  {
+                    backgroundColor: isDark ? '#282830' : '#f0f0f4',
+                    borderColor: isDark ? '#383844' : '#dcdce2',
+                  },
+                ]}
+                onPress={() => setBookToDelete(null)}>
+                <Text style={[styles.modalGhostButtonText, { color: isDark ? '#ffffff' : '#18181b' }]}>
+                  Cancel
+                </Text>
+              </Pressable>
+              <Pressable
+                className={pressFeedback}
+                style={[styles.modalPrimaryButton, { backgroundColor: '#dc2626' }]}
+                onPress={confirmDeleteBook}>
+                <Text style={[styles.modalPrimaryButtonText, { color: '#ffffff' }]}>Remove</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* First-run Onboarding Modal */}
+      <Modal
+        supportedOrientations={['portrait', 'landscape']}
+        visible={showOnboarding}
+        transparent
+        animationType="fade"
+        onRequestClose={dismissOnboarding}>
+        <View style={styles.modalOverlay}>
+          <ScrollView
+            style={{ maxHeight: '92%', flexGrow: 0, width: '100%', maxWidth: 360 }}
+            contentContainerStyle={[
+              styles.modalBox,
+              {
+                backgroundColor: isDark ? '#1d1d22' : '#ffffff',
+                borderColor: isDark ? '#32323c' : '#e4e4ec',
+                padding: 24,
+                maxWidth: 360,
+              },
+            ]}>
+            <View style={{ alignItems: 'center', marginBottom: 16 }}>
+              <View style={[styles.modalIconBox, { width: 56, height: 56, borderRadius: 28, backgroundColor: accent.hex }]}>
+                <Icon name="book" size={28} tone={contrastText(accent.hex)} />
+              </View>
+              <Text style={[styles.modalTitle, { fontSize: 21, fontWeight: '800', marginTop: 12, textAlign: 'center', color: isDark ? '#ffffff' : '#111111' }]}>
+                Welcome to Sirum
+              </Text>
+              <Text style={{ fontSize: 13.5, color: isDark ? '#92929e' : '#64646e', textAlign: 'center', marginTop: 4 }}>
+                Private, local-first reading for all your books
+              </Text>
+            </View>
+
+            <View style={{ gap: 14, marginVertical: 8 }}>
+              <View style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start' }}>
+                <View style={[styles.modalIconBox, { width: 32, height: 32, borderRadius: 8, backgroundColor: isDark ? '#262630' : '#eef2ff' }]}>
+                  <Icon name="cloud-offline-outline" size={17} tone={accent.hex} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 14, fontWeight: '700', color: isDark ? '#f4f4f6' : '#18181b' }}>
+                    100% Offline by Default
+                  </Text>
+                  <Text style={{ fontSize: 12.5, lineHeight: 17, color: isDark ? '#92929e' : '#5e5e68', marginTop: 2 }}>
+                    Your books, chapters, and annotations are stored directly on your device. No internet required to read.
+                  </Text>
+                </View>
+              </View>
+
+              <View style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start' }}>
+                <View style={[styles.modalIconBox, { width: 32, height: 32, borderRadius: 8, backgroundColor: isDark ? '#262630' : '#eef2ff' }]}>
+                  <Icon name="person-outline" size={17} tone={accent.hex} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 14, fontWeight: '700', color: isDark ? '#f4f4f6' : '#18181b' }}>
+                    Sign-In is Optional
+                  </Text>
+                  <Text style={{ fontSize: 12.5, lineHeight: 17, color: isDark ? '#92929e' : '#5e5e68', marginTop: 2 }}>
+                    You never need an account. Sign-in is available only if you choose to sync bookmarks across multiple devices.
+                  </Text>
+                </View>
+              </View>
+
+              <View style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start' }}>
+                <View style={[styles.modalIconBox, { width: 32, height: 32, borderRadius: 8, backgroundColor: isDark ? '#262630' : '#eef2ff' }]}>
+                  <Icon name="shield-checkmark-outline" size={17} tone={accent.hex} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 14, fontWeight: '700', color: isDark ? '#f4f4f6' : '#18181b' }}>
+                    Private & Tracker-Free
+                  </Text>
+                  <Text style={{ fontSize: 12.5, lineHeight: 17, color: isDark ? '#92929e' : '#5e5e68', marginTop: 2 }}>
+                    No analytics, telemetry, or reading surveillance. Your library remains completely your own.
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            <Pressable
+              className={pressFeedback}
+              style={[
+                styles.modalPrimaryButton,
+                {
+                  backgroundColor: accent.hex,
+                  marginTop: 20,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  paddingVertical: 12,
+                },
+              ]}
+              onPress={dismissOnboarding}>
+              <Text style={[styles.modalPrimaryButtonText, { color: contrastText(accent.hex), fontSize: 15, fontWeight: '700' }]}>
+                Get Started
+              </Text>
+            </Pressable>
+          </ScrollView>
+        </View>
+      </Modal>
 
       {/* Ask-once: library order (plan 5.9) */}
       <Modal

@@ -36,6 +36,7 @@ export const SettingKeys = {
   deviceCoverFit: 'device.coverFit',
   deviceSearchHistory: 'device.searchHistory',
   deviceReaderBrightness: 'device.readerBrightness',
+  deviceOnboardingSeen: 'device.onboardingSeen',
 } as const;
 
 export type SettingKey = (typeof SettingKeys)[keyof typeof SettingKeys];
@@ -132,6 +133,7 @@ export interface SettingValues {
   [SettingKeys.deviceCoverFit]: CoverFit;
   [SettingKeys.deviceSearchHistory]: string[];
   [SettingKeys.deviceReaderBrightness]: number;
+  [SettingKeys.deviceOnboardingSeen]: boolean;
 }
 
 // --- In-memory defaults (never persisted) -----------------------------------
@@ -174,6 +176,7 @@ export const SettingDefaults: SettingValues = {
   [SettingKeys.deviceCoverFit]: 'full',
   [SettingKeys.deviceSearchHistory]: [],
   [SettingKeys.deviceReaderBrightness]: 100,
+  [SettingKeys.deviceOnboardingSeen]: false,
 };
 
 // --- Related constants -------------------------------------------------------

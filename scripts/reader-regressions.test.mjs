@@ -383,3 +383,39 @@ test('TXT keeps typed bullets, indentation and internal blank lines across nativ
   assert.equal(chunks.map(chunk => chunk.text).join(''), source.replaceAll('\r\n', '\n'));
   assert.deepEqual(chunks.map(chunk => chunk.text.replace(/\n$/, '')).join('\n'), text);
 });
+
+test('logger sanitizes sensitive book text, paths, annotations, and auth tokens', async () => {
+  const { sanitize, logger, getCrashBreadcrumbs } = await import('../src/lib/logger.ts');
+  const rawContext = {
+    documentId: 'doc-123',
+    local_uri: 'file:///data/user/0/host.exp.exponent/files/books/doc-123/book.epub',
+    text_dir: 'file:///data/user/0/host.exp.exponent/files/books/doc-123/text/',
+    cover_uri: 'file:///data/user/0/host.exp.exponent/files/books/doc-123/cover.jpg',
+    token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+    passage: 'Secret book passage text that should never leave the device.',
+    note: 'Personal private reading annotation note.',
+    safeMetadata: {
+      chapterCount: 42,
+      format: 'epub',
+      error: 'Disk full error',
+    },
+  };
+  const sanitized = sanitize(rawContext);
+  assert.equal(sanitized.documentId, 'doc-123');
+  assert.equal(sanitized.local_uri, '[redacted]');
+  assert.equal(sanitized.text_dir, '[redacted]');
+  assert.equal(sanitized.cover_uri, '[redacted]');
+  assert.equal(sanitized.token, '[redacted]');
+  assert.equal(sanitized.passage, '[redacted]');
+  assert.equal(sanitized.note, '[redacted]');
+  assert.equal(sanitized.safeMetadata.chapterCount, 42);
+  assert.equal(sanitized.safeMetadata.format, 'epub');
+
+  logger.error('Test error event', new Error('Simulated failure'), rawContext);
+  const crumbs = getCrashBreadcrumbs();
+  assert.ok(crumbs.length > 0);
+  const lastCrumb = crumbs.at(-1);
+  assert.equal(lastCrumb.level, 'error');
+  assert.equal(lastCrumb.msg, 'Test error event');
+  assert.equal(lastCrumb.data.local_uri, '[redacted]');
+});

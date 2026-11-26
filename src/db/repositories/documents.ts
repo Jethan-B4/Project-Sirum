@@ -245,6 +245,15 @@ export const documents = {
     );
   },
 
+  async restore(id: string): Promise<void> {
+    const db = await getDb();
+    const now = new Date().toISOString();
+    await db.runAsync(
+      `UPDATE documents SET deleted_at = NULL, updated_at = ?, dirty = 1 WHERE id = ?`,
+      [now, id]
+    );
+  },
+
   /**
    * Records that this device opened the book. Writes ONLY the local-only
    * `last_opened_at` column — never `updated_at`, never `dirty` — so opening a

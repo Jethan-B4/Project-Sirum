@@ -74,4 +74,13 @@ export const highlights = {
       [now, now, id]
     );
   },
+
+  async restore(id: string): Promise<void> {
+    const db = await getDb();
+    const now = new Date().toISOString();
+    await db.runAsync(
+      `UPDATE highlights SET deleted_at = NULL, updated_at = ?, dirty = 1 WHERE id = ?`,
+      [now, id]
+    );
+  },
 };

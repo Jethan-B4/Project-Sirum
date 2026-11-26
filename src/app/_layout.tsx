@@ -9,10 +9,11 @@ import { getDb } from '@/db/client';
 import { AuthProvider } from '@/auth/session';
 import { SettingsProvider } from '@/features/settings/SettingsProvider';
 import { AppThemeProvider } from '@/theme/ThemeProvider';
+import { logger } from '@/lib/logger';
 
 export default function RootLayout() {
   useEffect(() => {
-    getDb().catch((err) => console.error('DB init failed', err));
+    getDb().catch((err) => logger.error('DB init failed', err));
   }, []);
 
   SplashScreen.preventAutoHideAsync();

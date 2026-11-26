@@ -165,18 +165,26 @@ interface CardProps {
   showBadges: boolean;
   showDetails: boolean;
   onPress: (book: LibraryDocument) => void;
+  onLongPress?: (book: LibraryDocument) => void;
 }
 
-export function BookCard({ book, gridSize, showBadges, showDetails, onPress }: CardProps) {
+export function BookCard({ book, gridSize, showBadges, showDetails, onPress, onLongPress }: CardProps) {
   const overlay = gridSize >= 3;
   const p = pct(book);
   const { isDark, accent } = useAppTheme();
+  const isLocal = book.local_uri != null;
+  const authorText = book.author?.trim() || 'Unknown author';
+  const progressText = p > 0 ? `${p}% read` : 'Unread';
+  const remoteText = isLocal ? '' : ', Not on this device';
+  const accessibilityLabel = `${book.title}, by ${authorText}, ${book.format.toUpperCase()} format, ${progressText}${remoteText}`;
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={book.title}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityHint="Tap to read, double tap and hold to remove from library"
       onPress={() => onPress(book)}
+      onLongPress={() => onLongPress?.(book)}
       className={pressFeedback} style={[
         styles.cardWrapper,
         {
@@ -235,21 +243,31 @@ const readDate = new Intl.DateTimeFormat(undefined, {
   month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
 });
 
-export function BookRow({ book, position, onPress }: {
+export function BookRow({ book, position, onPress, onLongPress }: {
   book: LibraryDocument;
   position?: string;
   onPress: (book: LibraryDocument) => void;
+  onLongPress?: (book: LibraryDocument) => void;
 }) {
   const p = pct(book);
   const timestamp = Date.parse((position ? book.last_read_at : book.created_at) ?? '');
   const date = Number.isFinite(timestamp)
     ? (position ? readDate : addedDate).format(timestamp)
     : 'Unknown date';
+  const isLocal = book.local_uri != null;
+  const authorText = book.author?.trim() || 'Unknown author';
+  const progressText = p > 0 ? `${p}% read` : 'Unread';
+  const remoteText = isLocal ? '' : ', Not on this device';
+  const dateInfo = position ? `Last read ${date}` : `Added ${date}`;
+  const accessibilityLabel = `${book.title}, by ${authorText}, ${book.format.toUpperCase()} format, ${progressText}, ${dateInfo}${remoteText}`;
 
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityHint="Tap to read, double tap and hold to remove from library"
       onPress={() => onPress(book)}
+      onLongPress={() => onLongPress?.(book)}
       className={`mb-2 flex-row items-center gap-4 rounded-xl border border-line bg-surface p-3.5 ${pressFeedback}`}>
       <View className="flex-1 min-w-0">
         <Text numberOfLines={2} className="font-ui text-tx text-base font-semibold">{book.title}</Text>

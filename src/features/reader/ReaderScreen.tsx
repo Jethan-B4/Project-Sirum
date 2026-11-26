@@ -416,14 +416,28 @@ function BookReader({ id }: { id: string }) {
     async (bid: string) => {
       await bookmarksRepo.softDelete(bid).catch(() => {});
       if (doc) setBms(await bookmarksRepo.list(doc.id).catch(() => []));
+      toast('Bookmark removed', {
+        label: 'Undo',
+        onPress: async () => {
+          await bookmarksRepo.restore(bid).catch(() => {});
+          if (doc) setBms(await bookmarksRepo.list(doc.id).catch(() => []));
+        },
+      }, 5000);
     },
-    [doc]
+    [doc, toast]
   );
 
   const deleteHighlight = useCallback(async (hid: string) => {
     await highlightsRepo.softDelete(hid).catch(() => {});
     if (doc) setHls(await highlightsRepo.list(doc.id).catch(() => []));
-  }, [doc]);
+    toast('Highlight removed', {
+      label: 'Undo',
+      onPress: async () => {
+        await highlightsRepo.restore(hid).catch(() => {});
+        if (doc) setHls(await highlightsRepo.list(doc.id).catch(() => []));
+      },
+    }, 5000);
+  }, [doc, toast]);
 
   const updateHighlightNote = useCallback(async (hid: string, note: string) => {
     try {
@@ -439,6 +453,13 @@ function BookReader({ id }: { id: string }) {
       await highlightsRepo.softDelete(hid);
       if (doc) setHls(await highlightsRepo.list(doc.id));
       setSelection(null);
+      toast('Highlight removed', {
+        label: 'Undo',
+        onPress: async () => {
+          await highlightsRepo.restore(hid).catch(() => {});
+          if (doc) setHls(await highlightsRepo.list(doc.id));
+        },
+      }, 5000);
     } catch {
       toast('Highlight could not be removed');
     }
