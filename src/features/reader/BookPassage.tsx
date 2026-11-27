@@ -38,12 +38,15 @@ export function BookPassage({ page, style, viewportHeight, coverUri, bookTitle, 
   const fontFamily = readingFontFamily(style.fam);
   return <ChunkedChapter {...reader} chunks={chunks} linkText={text} length={text.length} links={links} linkColor={linkColor(style.bg)}
     coverHeight={embeddedCover ? viewportHeight : undefined} paragraphs={paragraphs} publisherStyles={nav?.styles}
+    headingAlign={style.headingAlign} headingUnderline={style.headingUnderline}
     highlights={highlights} onSelectText={onSelectText} onSelectHighlight={onSelectHighlight}
     indent={style.indentParagraphs ? style.indentLength : 0} textStyle={{ color: style.tx, fontFamily, fontSize,
       fontWeight: String(style.wt) as '400', lineHeight: Math.round(fontSize * style.lh), textAlign: style.align }}>
     {index === 0 && !embeddedCover && coverUri && <ReaderCover uri={coverUri} label={bookTitle + ' cover'} height={viewportHeight} />}
     {fallbackTitle && text !== fallbackTitle && !text.startsWith(fallbackTitle + '\n') &&
       <Text accessibilityRole="header" style={{ color: style.tx, fontFamily, fontWeight: '600',
-        fontSize: fontSize * 1.3, marginBottom: 8, marginHorizontal: reader.margin }}>{fallbackTitle}</Text>}
+        fontSize: fontSize * 1.3, marginBottom: 8, marginHorizontal: reader.margin,
+        ...(style.headingAlign !== 'publisher' && { textAlign: style.headingAlign }),
+        ...(style.headingUnderline === 'on' && { textDecorationLine: 'underline' }) }}>{fallbackTitle}</Text>}
   </ChunkedChapter>;
 }

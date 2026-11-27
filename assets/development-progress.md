@@ -2,9 +2,30 @@
 
 Tracks implementation status against `offline-reader-dev-plan.md`. Update this file as milestones complete.
 
-**Last updated:** 2026-11-26
+**Last updated:** 2026-11-27
 
 ---
+
+## Reader navigation and display refinements (2026-11-27)
+
+- Chapter navigation now commits the active chapter and prepared page as one state update, avoiding an interim loading render after a swipe. Backward swipes and edge turns open the previous chapter at its end; forward turns still open at the beginning.
+- A short native tap recognizer now toggles reader controls from the center as well as respecting edge-turn gestures, while vertical scrolling and interactive links retain their handlers.
+- Reader settings can hide or show the chapter count beside chapter progress. The reader display popup now changes the current book only; all-book defaults stay in Settings. EPUB semantic headings are detected and can override publisher alignment and underline per book, with publisher formatting as the default.
+- Regression tests cover simple/detailed progress labels and backward chapter destinations. Physical-device gesture feel and heading rendering still need verification.
+
+## EPUB archive import limits (2026-11-27)
+
+- EPUB imports reject absolute, traversal, NUL-containing and duplicate normalized ZIP paths. Compressed archives are capped at 256 MiB, individual expanded entries at 64 MiB, total declared expanded content at 512 MiB, and selected extracted content at 256 MiB.
+- XML parsing disables entity processing and rejects `DOCTYPE` declarations in package, container and navigation documents.
+- Regression tests cover path normalization, traversal and duplicate rejection, and expanded-size budgets.
+
+## Haptics, library cover fit & update hardening (2026-11-27)
+
+- **Haptics (`src/lib/haptics.ts`):** new `expo-haptics` helper exposing `select` / `impact` / `success` / `warning`. Every call is best-effort — it no-ops on web and never surfaces a failure. Wired into the reader (chapter and page turns `impact`; bookmark/highlight add and undo `success`; bookmark, highlight and selection deletion `warning`) and the library (long-press to open the delete dialog `select`; confirmed removal `warning`; undo `success`).
+- **Toast screen-reader announcements:** `useChrome().toast` now calls `AccessibilityInfo.announceForAccessibility`, including the Undo action label, so confirmations and failures reach screen reader users rather than staying purely visual. `BookCard`/`BookRow` already carried full labels.
+- **Library cover fit (`BookCover`):** now honors the stored intrinsic `documents.cover_width`/`cover_height` and the `device.coverFit` setting. Art within ±8% of the 2:3 frame fills the frame; other art is shown whole (`contentFit="contain"`) over a blurred, dimmed copy of itself; `device.coverFit = 'crop'` forces crop-fill. `BookCard` and `BookRow` pass the stored dimensions, making Settings → Library → Cover fit functional.
+- **Document update safety:** `documents.update` now writes only an allowlisted set of metadata columns (`UPDATABLE_COLUMNS`). Unknown patch keys — e.g. from a future synced payload — are ignored instead of being interpolated directly as SQL identifiers, mirroring the highlights `color`/`note` allowlist.
+- **Validation:** `npx tsc --noEmit` clean, `npx expo lint` clean, 29/29 reader regression tests pass.
 
 ## Status Overview
 
@@ -42,7 +63,7 @@ Legend: ✅ done · 🟢 advanced / nearly done · 🟡 partial · ⬜ not start
 
 - Hyperlinks open a themed preview showing the link label and the complete destination paragraph, with **Continue reading** and **Go to passage** actions. External links show their address and require an explicit **Open link** action; unavailable destinations remain dismissible in the same popup.
 - The reader caches the current and adjacent chapter loads so horizontal swipes and chapter navigation can reuse prepared text and EPUB navigation data. Cache failures remain retryable and are reported if the user requests that chapter.
-- Primary app navigation no longer animates between stacked screens, removing the brief transition flash. Shared buttons and navigation controls now have consistent pressed-state scale and opacity feedback; the reader's **Next chapter** control clips its Android ripple to its rounded shape.
+- Primary app navigation was set to be immediate (no stacked-screen animation) to avoid a transition flash. *(Superseded 2026-11-27: slide transitions were re-enabled with a light cross-fade — see Page Transition Optimization.)* Shared buttons and navigation controls now have consistent pressed-state scale and opacity feedback; the reader's **Next chapter** control clips its Android ripple to its rounded shape.
 - Validation passed: 19 reader regression tests, Expo lint, `npx tsc --noEmit`, and an Android Expo bundle export. Physical-device touch feel and frame-pacing verification remains open.
 
 ---
@@ -200,10 +221,10 @@ Legend: ✅ done · 🟢 advanced / nearly done · 🟡 partial · ⬜ not start
   - Polished search input with instant clear action.
 
 ### 4. Page Transition Optimization
-- Updated `src/app/_layout.tsx` with smooth screen animations:
-  - **Tab-level views** (`/`, `/history`, `/import`, `/settings`): `animation: 'fade'` (180ms) for natural tab switching.
-  - **Sub-settings pages** (`settings-*`): `animation: 'slide_from_right'` (220ms) for hierarchical drill-down navigation.
+- Navigation transitions live in `src/app/_layout.tsx`:
+  - **All stacked screens** (`/`, `/history`, `/import`, `/settings`, `settings-*`): `animation: 'slide_from_right'`. A destination entered from the library, history or the menu slides in from the right, and going back plays the reverse (the previous page is revealed from the left). The bottom-nav and side-drawer use `router.navigate`, so menu jumps that move forward slide in from the right while returning pops back in reverse.
   - **Reader view** (`reader/[id]`): `animation: 'slide_from_bottom'` (260ms) for an immersive book-opening transition.
+- The shared `Screen` wrapper (`chrome/app-bar.tsx`) plays a slight fade-in (`FadeIn`, 220ms) on mount, so every screen's native slide is softened by a light cross-fade. Reanimated skips it automatically when the system Reduce Motion setting is on.
 
 ### 5. Reader Screen Parity (plan 5.6.1, prototype `sirum-reader-prototype.html`)
 - **Per-chapter reading model:** the reader now shows one chapter at a time (prototype `S.ch`) instead of all chapters in one ScrollView. Progress is still stored as global UTF-16 offsets; chapter jumps map through `positionFromOffset`/`positionFromChapterOffset`.
@@ -380,8 +401,8 @@ The screens, layout, and interactions from `sirum-ui-prototype.html` are impleme
 3. **Native text-selection verification** — verify selection handles, custom popup coexistence, copy/share targets, and text hit-testing on Android and iOS.
 4. **Reactive reads** — repository change notifications so library updates without focus reloads (plan 4.6).
 5. **Large-book device profiling** check restore, chapter transitions, search jumps, peak memory and long flings on Android and iOS, including a 500+ page EPUB and a single-chapter TXT.
-6. **Remove from library.** `documents.softDelete` exists, but the library has no delete action. Add a confirmed delete with undo, then remove local files only after the tombstone can sync (plan 5.9).
-7. **Import limits.** Cap uncompressed EPUB size, reject archive paths that escape the package, and disable XML entity expansion (see the review below).
+6. **Remove from library.** ✅ Confirmed removal with undo is implemented; local files remain available through the undo window (plan 5.9).
+7. **Import limits.** ✅ EPUB paths, duplicate entries, compressed/expanded sizes and XML DTD/entity handling are bounded; physical-device testing with large books remains open.
 
 ### Practice and security review (2026-11-26)
 
@@ -395,7 +416,7 @@ Reviewed against common reader-app behavior (library management, reading control
 | Device backup | Book files, chapter text, notes, and `reader.db` live in the app documents directory. Android Auto Backup and iOS backup copy that directory by default, so "books stay on this device" is not yet true of a Google or iCloud backup. Exclude `books/` and the database, or say so in About and the privacy policy. |
 | Archive safety | `archivePath` strips a leading slash but still accepts `..` segments. `unzipSync` inflates a whole EPUB with no uncompressed-size cap, so a small zip can exhaust memory. Reject absolute paths, `..`, NUL bytes, and duplicate names. Stop inflating past a fixed per-entry and total budget. |
 | EPUB XML | `XMLParser` is created with attribute parsing only. fast-xml-parser still expands entities by default. Disable entity processing and reject documents that contain a `DOCTYPE`. |
-| Column updates | `documents.update` copies object keys into SQL identifiers. Highlights already allowlist `color` and `note`. Use the same allowlist for documents before sync applies remote rows. |
+| Column updates | `documents.update` copies object keys into SQL identifiers. Highlights already allowlist `color` and `note`. ✅ Done — `documents.update` now writes only an allowlisted set of metadata columns; unknown keys are ignored. |
 | SVG illustrations | `isPublicationAsset` caches `.svg` and the reader displays those files with `expo-image`. Keep illustrations to PNG, JPEG, GIF, and WebP. Do not render publisher SVG or HTML in a WebView. |
 | External links | The scheme allowlist is in place. Also drop URLs that contain credentials (`user:pass@host`) and show the host in the preview, not only the full address. |
 | PDF WebView | When PDF extraction starts, load pdf.js from the app bundle only. Disable navigation, remote URLs, and file access outside the chosen PDF. |
@@ -408,8 +429,8 @@ Reviewed against common reader-app behavior (library management, reading control
 |---|---|---|
 | Delete a book | Planned in 5.9 and implemented in the repository, missing in the library UI. One-tap bookmark and highlight deletion also has no undo. | ✅ Resolved (long-press delete dialog + 5s undo toast; bookmark/highlight restore) |
 | Onboarding | First launch does not explain that reading is offline and that sign-in is optional. About already states the privacy split; the first-run screen should say the same thing before anyone imports a library. | ✅ Resolved (first-run onboarding modal with offline & privacy pillars) |
-| Accessibility | Many controls have roles and labels. Book cards announce the title only, so author and progress are invisible to a screen reader. Confirm text at the largest system size still scrolls inside the Aa sheet, settings, and the order prompt. | 🟢 Resolved for book cards & rows (comprehensive title/author/format/progress/local labels + accessibility hints) |
-| Touch and motion | Chapter turns and deletes have no haptic confirmation. System Reduce Motion is already honored. Keep new motion on the native driver and skip it when Reduce Motion is on. | Open |
+| Accessibility | Many controls have roles and labels. Book cards announce the title only, so author and progress are invisible to a screen reader. Confirm text at the largest system size still scrolls inside the Aa sheet, settings, and the order prompt. | 🟢 Resolved for book cards & rows (comprehensive title/author/format/progress/local labels + accessibility hints); toasts (including Undo) are now announced via `announceForAccessibility`. |
+| Touch and motion | Chapter turns and deletes have no haptic confirmation. System Reduce Motion is already honored. Keep new motion on the native driver and skip it when Reduce Motion is on. | ✅ Resolved — `src/lib/haptics.ts` wired into reader turns/bookmarks/highlights and library delete/undo. |
 | Link and share copy | Copy and share are user-initiated, which is the right default. Do not put passage text on the clipboard any other way. | Open |
 | Production failures | `logger` prints only in development, so a release crash or a failed import leaves no record. Add a crash reporter later that drops book text, paths, notes, and tokens. | ✅ Resolved (`src/lib/logger.ts` 50-breadcrumb ring buffer + recursive `sanitize()` redacting paths/text/tokens/notes) |
 | CI | Lint, `tsc`, and the reader regression script are local. Run them on every change before sync code lands (plan 9.5 and 9.8). | Open |

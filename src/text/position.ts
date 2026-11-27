@@ -15,6 +15,18 @@ export function displayPercent(fraction: number) {
   return fraction >= 1 ? 100 : Math.min(99, Math.round(fraction * 100));
 }
 
+export function progressLabel(percent: number, scope: 'book' | 'chapter', chapterIndex: number,
+  chapterCount: number, showChapterCount: boolean) {
+  if (scope === 'book') return `${percent}% of book`;
+  return showChapterCount ? `Ch. ${chapterIndex + 1} of ${chapterCount} · ${percent}%` : `${percent}%`;
+}
+
+export function chapterTurnDestination(chapterIndex: number, step: -1 | 1, chapterCount: number, atEnd = step < 0) {
+  const index = chapterIndex + step;
+  if (index < 0 || index >= chapterCount) return null;
+  return { index, fraction: atEnd ? 1 : 0 };
+}
+
 export function bookSliderDestination(value: number, chapters: readonly { start_offset: number; char_count: number }[], count: number) {
   if (!chapters.length || value <= 0) return { index: 0, fraction: 0 };
   if (value >= 100) return { index: chapters.length - 1, fraction: 1 };

@@ -21,16 +21,15 @@ const THEME_SWATCHES: readonly (readonly [string, string, string])[] = [
 
 /**
  * Display popup opened from the reader's "Aa" button (prototype `.disp`).
- * Writes `reader.style` (or the per-book override when scoped to this book).
+ * Writes only the current book's override. Defaults for all books live in Settings.
  */
 export function DisplayPopup({
   visible,
   toolbarHeight,
   onClose,
   style,
-  scope,
-  onScopeChange,
   hasOverride,
+  headingDetected,
   onResetBook,
   brightness,
   onBrightness,
@@ -40,9 +39,8 @@ export function DisplayPopup({
   toolbarHeight: number;
   onClose: () => void;
   style: ReadingStyle;
-  scope: 'all' | 'book';
-  onScopeChange: (s: 'all' | 'book') => void;
   hasOverride: boolean;
+  headingDetected: boolean;
   onResetBook: () => void;
   /** Device-local brightness, 20–100 (device.readerBrightness). */
   brightness: number;
@@ -60,9 +58,7 @@ export function DisplayPopup({
         <IconButton icon="close" label="Close display settings" onPress={onClose} />
       </View>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 12 }}>
-        <SectionLabel>Apply to</SectionLabel>
-        <SegmentedControl options={[['all', 'All books'], ['book', 'This book only']]} value={scope} onChange={onScopeChange} />
-        {scope === 'book' && hasOverride && <Chip label="Reset this book" onPress={onResetBook} />}
+        {hasOverride && <Chip label="Reset this book" onPress={onResetBook} />}
         <View className="my-3">
           <SegmentedControl options={[['text', 'Text'], ['colors', 'Colors'], ['layout', 'Layout']]} value={tab} onChange={setTab} />
         </View>
@@ -71,6 +67,21 @@ export function DisplayPopup({
             step={10} onChange={(size) => onPatch({ size })} />
           <LineHeightControl value={style.lh} onChange={onPatch} />
           <ParagraphIndentControl style={style} onChange={onPatch} />
+          {headingDetected && <>
+            <SectionLabel>Chapter heading alignment</SectionLabel>
+            <SegmentedControl options={[
+              ['publisher', 'Publisher'],
+              ['left', 'Left'],
+              ['center', 'Center'],
+              ['right', 'Right'],
+            ]} value={style.headingAlign} onChange={(headingAlign) => onPatch({ headingAlign })} />
+            <SectionLabel>Chapter heading underline</SectionLabel>
+            <SegmentedControl options={[
+              ['publisher', 'Publisher'],
+              ['on', 'On'],
+              ['off', 'Off'],
+            ]} value={style.headingUnderline} onChange={(headingUnderline) => onPatch({ headingUnderline })} />
+          </>}
           <SectionLabel>Alignment</SectionLabel>
           <SegmentedControl options={[['left', 'Left'], ['justify', 'Justify']]} value={style.align}
             onChange={(align) => onPatch({ align })} />

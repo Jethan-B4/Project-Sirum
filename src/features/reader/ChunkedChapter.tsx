@@ -2,10 +2,16 @@ import React, { useMemo, useRef, useState } from 'react';
 import { Animated, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type TextStyle, type NativeScrollEvent, type LayoutChangeEvent, type GestureResponderEvent } from 'react-native';
 import { Image } from 'expo-image';
 import { ReaderCover } from './ReaderCover';
-import { GestureDetector, ScrollView as GestureScrollView } from 'react-native-gesture-handler';
+import {
+  GestureDetector,
+  ScrollView as GestureScrollView,
+  useSimultaneousGestures,
+  useTapGesture,
+} from 'react-native-gesture-handler';
 import { useSwipeTurn, type Direction, type TurnDestination } from './useSwipeTurn';
 import { linksInRange } from '@/text/links';
 import type { BookLink, ChapterNavigation } from '@/formats/types';
+import type { HeadingAlignment, HeadingUnderline } from '@/lib/settingsKeys';
 import { type Chunk, findChunkForOffset, paragraphRows } from '@/text/chunk';
 import type { HighlightRow } from '@/db/repositories/highlights';
 import { decodeHighlightStyle } from './textSelection';
@@ -35,9 +41,10 @@ function passageLine(frame: Frame, target: number, byOffset: boolean) {
   if (line) return { offset: line.offset, y: top + line.y };
 }
 
-const LinkedText = React.memo(function LinkedText({ chunk, linkText, links, styles, highlights, textStyle, color, onLink, onSelectHighlight }: {
+const LinkedText = React.memo(function LinkedText({ chunk, linkText, links, styles, highlights, textStyle, color, onLink, onSelectHighlight, underlineOverride }: {
   styles: ChapterNavigation['styles']; textStyle: TextStyle;
   chunk: Chunk; linkText: string; links: BookLink[];
+  underlineOverride?: boolean;
   highlights?: Pick<HighlightRow, 'id' | 'start_offset' | 'end_offset' | 'color' | 'note'>[];
   color: string; onLink(href: string, label: string): void;
   onSelectHighlight?: (id: string, anchor: SelectionAnchor) => void;
@@ -48,7 +55,7 @@ const LinkedText = React.memo(function LinkedText({ chunk, linkText, links, styl
   function styledText(from: number, to: number) {
     const annotations = highlights?.filter(highlight =>
       highlight.start_offset < chunk.startOffset + to && highlight.end_offset > chunk.startOffset + from) ?? [];
-    if (!spans.length && !annotations.length) return text.slice(from, to);
+    if (!spans.length && !annotations.length && underlineOverride !== true) return text.slice(from, to);
     const nodes: React.ReactNode[] = [];
     let cursor = from;
     while (cursor < to) {
@@ -65,7 +72,7 @@ const LinkedText = React.memo(function LinkedText({ chunk, linkText, links, styl
       const fontSize = textStyle.fontSize ?? 17;
       const annotationStyle = highlight ? decodeHighlightStyle(highlight.color) : null;
       const decorationLine = [
-        underline || annotationStyle?.underline || highlight?.note ? 'underline' : '',
+        (underlineOverride ?? underline) || annotationStyle?.underline || highlight?.note ? 'underline' : '',
         strike ? 'line-through' : '',
       ].filter(Boolean).join(' ');
       const style: TextStyle = {
@@ -102,13 +109,14 @@ const LinkedText = React.memo(function LinkedText({ chunk, linkText, links, styl
   return <>{parts}{styledText(cursor, text.length)}</>;
 });
 
-function PassageText({ part, linkText, styles, links, highlights, textStyle, color, onLink, onLines, onSelectText, onSelectHighlight, heading, indent = 0 }: {
+function PassageText({ part, linkText, styles, links, highlights, textStyle, color, onLink, onLines, onSelectText, onSelectHighlight, heading, underlineOverride, indent = 0 }: {
   part: Chunk; linkText: string; styles: ChapterNavigation['styles']; links: BookLink[]; textStyle: TextStyle;
   highlights?: Pick<HighlightRow, 'id' | 'start_offset' | 'end_offset' | 'color' | 'note'>[];
   color: string; onLink(href: string, label: string): void; onLines(lines: Line[]): void;
   onSelectText?: (offset: number, anchor: SelectionAnchor) => void;
   onSelectHighlight?: (id: string, anchor: SelectionAnchor) => void;
   heading?: boolean;
+  underlineOverride?: boolean;
   indent?: number;
 }) {
   const linesRef = useRef<Line[]>([]);
@@ -146,7 +154,8 @@ function PassageText({ part, linkText, styles, links, highlights, textStyle, col
       }}
     >
       {prefix}<LinkedText chunk={part} linkText={linkText} links={links} styles={styles} highlights={highlights}
-        textStyle={textStyle} color={color} onLink={onLink} onSelectHighlight={onSelectHighlight} />
+        textStyle={textStyle} color={color} onLink={onLink} onSelectHighlight={onSelectHighlight}
+        underlineOverride={underlineOverride} />
     </Text>
   );
 }
@@ -184,6 +193,8 @@ type ChapterProps = {
   safeBottom?: number;
   edgeTaps?: boolean;
   indent?: number;
+  headingAlign?: HeadingAlignment;
+  headingUnderline?: HeadingUnderline;
   prepareChapter?: (step: Direction, atEnd: boolean) => Promise<TurnDestination | null>;
 };
 
@@ -201,7 +212,8 @@ export function ChunkedChapter(props: ChapterProps) {
     onScrollStart,
     onChapterSwipe,
     paged = false,
-    onPageTurn, edgeTaps, indent = 0, prepareChapter, safeTop = 0, safeBottom = 0,
+    onPageTurn, edgeTaps, indent = 0, prepareChapter, headingAlign = 'publisher',
+    headingUnderline = 'publisher', safeTop = 0, safeBottom = 0,
     margin,
     textStyle,
     publisherStyles,
@@ -245,6 +257,7 @@ export function ChunkedChapter(props: ChapterProps) {
   const visibleRows = useMemo(() => paragraphs?.length
     ? chunks.slice(start, end).map((chunk) => paragraphRows(chunk, paragraphs)) : undefined, [chunks, paragraphs, start, end]);
   const scroll = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  const interactivePress = useRef(false);
   const frames = useRef(new Map<number, Frame>());
   const dimensions = useRef({ viewport: 0, content: 0 });
   const seeking = useRef(initialOffset > 0);
@@ -268,11 +281,33 @@ export function ChunkedChapter(props: ChapterProps) {
   }
   function turn(step: Direction) {
     const y = nextScrollY(step);
-    if (y === null) onChapterSwipe?.(step, paged && step < 0);
+    if (y === null) onChapterSwipe?.(step, step < 0);
     else if (y !== undefined) { onPageTurn?.(step); scrollToPage(y); }
   }
   const swipe = useSwipeTurn(width, !!onChapterSwipe,
-    step => prepareChapter?.(step, false) ?? null, step => onChapterSwipe?.(step), onScrollStart);
+    step => prepareChapter?.(step, step < 0) ?? null,
+    step => onChapterSwipe?.(step, step < 0), onScrollStart);
+  const tap = useTapGesture({
+    enabled: !!onToggleControls,
+    runOnJS: true,
+    cancelsTouchesInView: false,
+    cancelsJSResponder: false,
+    maxDuration: 250,
+    maxDistance: 12,
+    onActivate: event => {
+      const x = event.x;
+      requestAnimationFrame(() => {
+        if (!onToggleControls || swipe.suppressTap() || interactivePress.current) {
+          interactivePress.current = false;
+          return;
+        }
+        swipe.cancel();
+        if (edgeTaps && (x < width / 3 || x > width * 2 / 3)) turn(x < width / 3 ? -1 : 1);
+        else onToggleControls();
+      });
+    },
+  });
+  const readerGestures = useSimultaneousGestures(swipe.pan, tap);
 
   function restore() {
     if (!seeking.current) return;
@@ -301,6 +336,19 @@ export function ChunkedChapter(props: ChapterProps) {
     frame.rows.set(offset, { ...frame.rows.get(offset), ...change });
     frames.current.set(index, frame);
     restore();
+  }
+
+  function markInteractiveTap() {
+    interactivePress.current = true;
+    requestAnimationFrame(() => requestAnimationFrame(() => { interactivePress.current = false; }));
+  }
+  function handleLink(href: string, label: string) {
+    markInteractiveTap();
+    onLink(href, label);
+  }
+  function handleSelectHighlight(id: string, anchor: SelectionAnchor) {
+    markInteractiveTap();
+    onSelectHighlight?.(id, anchor);
   }
 
   function slotAt(y: number) {
@@ -395,7 +443,7 @@ export function ChunkedChapter(props: ChapterProps) {
           return <View key={chunk.chunkIndex} style={{ marginHorizontal: fullCover ? 0 : margin, paddingVertical: fullCover ? 0 : 6 }}
             onLayout={(e) => { onLayout(e); updateFrame(index, { lines: [{ offset: chunk.startOffset, y: 0 }] }); }}>
             {illustration.href ? <Pressable accessibilityRole="link" accessibilityLabel={illustration.alt || 'Linked illustration'}
-              onPress={(e) => { e.stopPropagation(); onLink(illustration.href!, illustration.alt || 'Linked illustration'); }}>{picture}</Pressable> : picture}
+              onPress={(e) => { e.stopPropagation(); handleLink(illustration.href!, illustration.alt || 'Linked illustration'); }}>{picture}</Pressable> : picture}
           </View>;
         }
         const font = textStyle.fontSize ?? 17;
@@ -405,6 +453,9 @@ export function ChunkedChapter(props: ChapterProps) {
             onLayout={onLayout}>
             {visibleRows ? visibleRows[chunk.chunkIndex - start].map((row) => {
               const block = row.paragraph;
+              const align = block?.heading && headingAlign !== 'publisher' ? headingAlign : block?.align;
+              const underlineOverride = block?.heading && headingUnderline !== 'publisher'
+                ? headingUnderline === 'on' : undefined;
               const depth = block?.indent ?? 0;
               const endsBlock = row.text.endsWith('\n') || row.startOffset + row.text.length === length;
               if (block?.hidden) return <View key={row.startOffset} collapsable={false}
@@ -423,11 +474,11 @@ export function ChunkedChapter(props: ChapterProps) {
                   {depth > 0 && <Text style={[textStyle, { minWidth: font * 1.3, marginEnd: font * 0.3, textAlign: 'right' }]}>
                     {row.first ? block.marker : undefined}
                   </Text>}
-                  <PassageText part={row} linkText={linkText} indent={row.first && !block?.heading && !block?.marker && block?.align !== 'center' && block?.align !== 'right' && row.text.trim() ? indent : 0} heading={block?.heading} styles={publisherStyles} links={links} highlights={highlights} textStyle={block?.align ? { ...textStyle, textAlign: block.align } : textStyle} color={linkColor} onLink={onLink} onSelectText={onSelectText} onSelectHighlight={onSelectHighlight}
+                  <PassageText part={row} linkText={linkText} indent={row.first && !block?.heading && !block?.marker && align !== 'center' && align !== 'right' && row.text.trim() ? indent : 0} heading={block?.heading} underlineOverride={underlineOverride} styles={publisherStyles} links={links} highlights={highlights} textStyle={align ? { ...textStyle, textAlign: align } : textStyle} color={linkColor} onLink={handleLink} onSelectText={onSelectText} onSelectHighlight={handleSelectHighlight}
                     onLines={(lines) => updateRow(chunk.chunkIndex, row.startOffset, { lines })} />
                 </View>
               );
-            }) : <PassageText part={chunk} linkText={linkText} styles={publisherStyles} links={links} highlights={highlights} textStyle={textStyle} color={linkColor} onLink={onLink} onSelectText={onSelectText} onSelectHighlight={onSelectHighlight}
+            }) : <PassageText part={chunk} linkText={linkText} styles={publisherStyles} links={links} highlights={highlights} textStyle={textStyle} color={linkColor} onLink={handleLink} onSelectText={onSelectText} onSelectHighlight={handleSelectHighlight}
               onLines={(lines) => updateFrame(chunk.chunkIndex, { lines })} />}
           </View>
         );
@@ -437,20 +488,14 @@ export function ChunkedChapter(props: ChapterProps) {
   );
   if (!onToggleControls) return content;
   return (
-    <GestureDetector gesture={swipe.pan} touchAction="pan-y">
-      <Pressable accessible={false} style={{ flex: 1, overflow: 'hidden' }} onPress={event => {
-        if (swipe.suppressTap()) return;
-        swipe.cancel();
-        const x = event.nativeEvent.pageX;
-        if (edgeTaps && (x < width / 3 || x > width * 2 / 3)) turn(x < width / 3 ? -1 : 1);
-        else onToggleControls();
-      }}>
+    <GestureDetector gesture={readerGestures} touchAction="pan-y">
+      <View accessible={false} style={{ flex: 1, overflow: 'hidden' }}>
         <Animated.View style={[{ flex: 1 }, swipe.activeStyle]}>{content}</Animated.View>
         {swipe.preview && <Animated.View key={swipe.preview.step} pointerEvents="none" accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants" style={[StyleSheet.absoluteFill, swipe.previewStyle]}>
           {swipe.preview.view}
         </Animated.View>}
-      </Pressable>
+      </View>
     </GestureDetector>
   );
 }

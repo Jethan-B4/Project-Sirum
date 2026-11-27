@@ -10,6 +10,7 @@
 export const SettingKeys = {
   // Reader (synced)
   readerPercentageMode: 'reader.percentageMode',
+  readerProgressChapterCount: 'reader.progressChapterCount',
   readerStyle: 'reader.style',
   readerNextButton: 'reader.nextChapterButton',
   readerEdgeTaps: 'reader.edgeTaps',
@@ -55,6 +56,8 @@ export function isDeviceLocalKey(key: string): boolean {
 
 /** Reader progress label: percentage of the whole book, or of the current chapter only. */
 export type PercentageMode = 'book' | 'chapter';
+export type HeadingAlignment = 'publisher' | 'left' | 'center' | 'right';
+export type HeadingUnderline = 'publisher' | 'on' | 'off';
 
 /**
  * Library ordering:
@@ -107,6 +110,8 @@ export interface ReadingStyle {
   align: TextAlign;
   indentParagraphs: boolean;
   indentLength: number; // em spaces
+  headingAlign: HeadingAlignment;
+  headingUnderline: HeadingUnderline;
 }
 
 export interface SettingValues {
@@ -115,6 +120,7 @@ export interface SettingValues {
   [SettingKeys.readerTransition]: 'fade' | 'slide' | 'none';
   [SettingKeys.readerTransitionSpeed]: 'fast' | 'normal' | 'slow';
   [SettingKeys.readerPercentageMode]: PercentageMode;
+  [SettingKeys.readerProgressChapterCount]: boolean;
   [SettingKeys.readerStyle]: ReadingStyle;
   [SettingKeys.libraryOrderMode]: LibraryOrderMode;
   [SettingKeys.librarySort]: LibrarySort;
@@ -150,6 +156,8 @@ export const DEFAULT_READING_STYLE: ReadingStyle = {
   align: 'justify',
   indentParagraphs: false,
   indentLength: 2,
+  headingAlign: 'publisher',
+  headingUnderline: 'publisher',
 };
 
 export const SettingDefaults: SettingValues = {
@@ -158,6 +166,7 @@ export const SettingDefaults: SettingValues = {
   [SettingKeys.readerTransition]: 'fade',
   [SettingKeys.readerTransitionSpeed]: 'normal',
   [SettingKeys.readerPercentageMode]: 'book',
+  [SettingKeys.readerProgressChapterCount]: true,
   [SettingKeys.readerStyle]: DEFAULT_READING_STYLE,
   [SettingKeys.libraryOrderMode]: 'recent',
   [SettingKeys.librarySort]: 'added',
@@ -243,6 +252,12 @@ export function normalizeStylePatch(
   }
   if (typeof out.mar === 'number' && out.mar > 10) {
     out.mar = Math.min(10, Math.round(out.mar / 4));
+  }
+  if (out.headingAlign !== undefined && !['publisher', 'left', 'center', 'right'].includes(out.headingAlign)) {
+    delete out.headingAlign;
+  }
+  if (out.headingUnderline !== undefined && !['publisher', 'on', 'off'].includes(out.headingUnderline)) {
+    delete out.headingUnderline;
   }
   return out;
 }

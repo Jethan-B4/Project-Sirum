@@ -2,10 +2,56 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chunkChapter, findChunkForOffset, paragraphRows, plainParagraphs } from '../src/text/chunk.ts';
 import { resumePosition } from '../src/features/reader/resume.ts';
-import { bookSliderDestination, displayPercent } from '../src/text/position.ts';
+import { bookSliderDestination, chapterTurnDestination, displayPercent, progressLabel } from '../src/text/position.ts';
 import { searchBook } from '../src/features/reader/searchBook.ts';
 import { createChapterCache } from '../src/features/reader/chapterCache.ts';
 import { characterRangeAt, decodeHighlightStyle, encodeHighlightStyle, wordRangeAt } from '../src/features/reader/textSelection.ts';
+import {
+  ArchiveRejectedError,
+  assertArchiveCompressedSize,
+  assertNoXmlDoctype,
+  createArchiveGuard,
+  MAX_ARCHIVE_COMPRESSED_BYTES,
+  normalizeArchivePath,
+} from '../src/formats/epub/archiveSafety.ts';
+
+test('EPUB archive paths reject traversal, absolute paths and duplicate normalized names', () => {
+  assert.equal(normalizeArchivePath('./OPS\\chapter.xhtml'), 'OPS/chapter.xhtml');
+  for (const name of ['../outside', 'OPS/../../outside', '/absolute', '\\absolute', 'C:\\outside', 'OPS/\0chapter']) {
+    assert.throws(() => normalizeArchivePath(name), ArchiveRejectedError);
+  }
+  const guard = createArchiveGuard();
+  assert.equal(guard('./OPS/chapter.xhtml', 12), 'OPS/chapter.xhtml');
+  assert.throws(() => guard('OPS\\chapter.xhtml', 12), /duplicate entry/);
+});
+
+test('EPUB archive guard caps declared per-entry and total expanded sizes', () => {
+  const guard = createArchiveGuard();
+  assert.throws(() => guard('large.bin', 64 * 1024 * 1024 + 1), /per-entry size limit/);
+  const total = createArchiveGuard();
+  for (let i = 0; i < 8; i++) total(`part-${i}.bin`, 64 * 1024 * 1024);
+  assert.throws(() => total('overflow.bin', 1), /total uncompressed size limit/);
+});
+
+test('EPUB archives cap compressed size and reject XML document type declarations', () => {
+  assert.doesNotThrow(() => assertArchiveCompressedSize(MAX_ARCHIVE_COMPRESSED_BYTES));
+  assert.throws(() => assertArchiveCompressedSize(MAX_ARCHIVE_COMPRESSED_BYTES + 1), /compressed file exceeds/);
+  assert.doesNotThrow(() => assertNoXmlDoctype('<package><metadata /></package>'));
+  assert.throws(() => assertNoXmlDoctype('<!DOCTYPE package [<!ENTITY x "x">]><package />'), /DOCTYPE declarations/);
+});
+
+test('reader progress labels keep simple percentages and optionally include chapter counts', () => {
+  assert.equal(progressLabel(42, 'chapter', 4, 23, false), '42%');
+  assert.equal(progressLabel(42, 'chapter', 4, 23, true), 'Ch. 5 of 23 · 42%');
+  assert.equal(progressLabel(42, 'book', 4, 23, false), '42% of book');
+});
+
+test('chapter swipes return to the previous chapter end and respect book boundaries', () => {
+  assert.deepEqual(chapterTurnDestination(4, -1, 23), { index: 3, fraction: 1 });
+  assert.deepEqual(chapterTurnDestination(4, 1, 23), { index: 5, fraction: 0 });
+  assert.equal(chapterTurnDestination(0, -1, 23), null);
+  assert.equal(chapterTurnDestination(22, 1, 23), null);
+});
 
 test('reader selection resolves Unicode words and preserves highlight color plus underline', () => {
   const text = '🧙 café reading';

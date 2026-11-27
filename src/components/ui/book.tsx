@@ -5,8 +5,14 @@ import { Pressable, StyleSheet, Text, View, type DimensionValue } from 'react-na
 
 import { Icon } from '@/components/ui/icon';
 import type { LibraryDocument } from '@/db/repositories/documents';
+import { SettingKeys } from '@/lib/settingsKeys';
+import { useSettings } from '@/features/settings/SettingsProvider';
 import { useAppTheme } from '@/theme/ThemeProvider';
 import { pressFeedback } from './press-feedback';
+
+/** Cover frame ratio (2:3). Art within ±8% of this fills the frame; anything else is shown whole. */
+const FRAME_RATIO = 2 / 3;
+const FRAME_RATIO_TOLERANCE = 0.08;
 
 // Curated luxury book cover palette for titles without cover art
 const COVER_PALETTES: [string, string][] = [
@@ -36,6 +42,8 @@ export function BookCover({
   title,
   author,
   coverUri,
+  coverWidth,
+  coverHeight,
   width = '100%',
   height,
   radius = 0,
@@ -53,7 +61,16 @@ export function BookCover({
 }) {
   const [imageError, setImageError] = useState(false);
   const [color1, color2] = coverPalette(title);
+  const { get } = useSettings();
   const showImage = !!coverUri && !imageError;
+
+  // Fill the frame only when the user forces it, or when the art is already
+  // close to the 2:3 frame. Unknown or unusually-shaped art is shown whole
+  // (contentFit="contain") over a blurred, dimmed copy of itself.
+  const ratio = coverWidth && coverHeight ? coverWidth / coverHeight : null;
+  const nearFrame =
+    ratio != null && Math.abs(ratio - FRAME_RATIO) / FRAME_RATIO <= FRAME_RATIO_TOLERANCE;
+  const fill = get(SettingKeys.deviceCoverFit) === 'crop' || nearFrame;
 
   return (
     <View
@@ -67,6 +84,18 @@ export function BookCover({
       ]}>
       {showImage ? (
         <View style={StyleSheet.absoluteFill}>
+          {!fill && (
+            <>
+              <Image
+                source={{ uri: coverUri }}
+                style={StyleSheet.absoluteFill}
+                contentFit="cover"
+                blurRadius={24}
+                cachePolicy="memory-disk"
+              />
+              <View style={[StyleSheet.absoluteFill, styles.blurScrim]} />
+            </>
+          )}
           <Image
             source={{ uri: coverUri }}
             style={{
@@ -74,7 +103,7 @@ export function BookCover({
               height: '100%',
               borderRadius: radius,
             }}
-            contentFit="cover"
+            contentFit={fill ? 'cover' : 'contain'}
             cachePolicy="memory-disk"
             onError={() => setImageError(true)}
           />
@@ -197,6 +226,8 @@ export function BookCard({ book, gridSize, showBadges, showDetails, onPress, onL
           title={book.title}
           author={book.author}
           coverUri={book.cover_uri}
+          coverWidth={book.cover_width}
+          coverHeight={book.cover_height}
           radius={overlay ? 10 : 0}
           compact={overlay}
         />
@@ -284,6 +315,7 @@ export function BookRow({ book, position, onPress, onLongPress }: {
         </View>
       </View>
       <BookCover key={book.cover_uri} title={book.title} author={book.author} coverUri={book.cover_uri}
+        coverWidth={book.cover_width} coverHeight={book.cover_height}
         width={64} height={96} radius={6} compact />
     </Pressable>
   );
@@ -295,6 +327,9 @@ const styles = StyleSheet.create({
     position: 'relative',
     backgroundColor: '#1e293b',
     aspectRatio: 2 / 3,
+  },
+  blurScrim: {
+    backgroundColor: 'rgba(15,17,21,0.45)',
   },
   spineShadow: {
     position: 'absolute',

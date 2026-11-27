@@ -34,7 +34,7 @@ export default function ReaderSettings() {
       </Section>
       <Section
         title="Progress display"
-        description="Choose whether the reader’s progress bar shows and seeks through the whole book or the current chapter.">
+        description="Choose the progress scope and whether to show the chapter number alongside the percentage.">
         <SegmentedControl
           options={[
             ['book', 'Whole book'],
@@ -43,10 +43,16 @@ export default function ReaderSettings() {
           value={get(SettingKeys.readerPercentageMode)}
           onChange={(v) => set(SettingKeys.readerPercentageMode, v)}
         />
+        <SectionLabel>Chapter count in the progress bar</SectionLabel>
+        <SegmentedControl
+          options={[[false, 'Simple'], [true, 'Show chapter count']]}
+          value={get(SettingKeys.readerProgressChapterCount)}
+          onChange={(v) => set(SettingKeys.readerProgressChapterCount, v)}
+        />
       </Section>
       <Section
         title="Reading display"
-        description="Default for all books. Open Aa inside a book to give that book its own style.">
+        description="These are the defaults for all books. Aa inside a book changes only that book.">
         <ReadingStyleEditor
           value={style}
           onChange={(patch) => setJson(SettingKeys.readerStyle, { ...style, ...patch })}

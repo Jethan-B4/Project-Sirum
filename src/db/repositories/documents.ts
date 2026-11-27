@@ -57,6 +57,32 @@ export interface ListDocumentsOptions {
 
 const FORMAT_VALUES: DocumentFormat[] = ['epub', 'txt', 'pdf'];
 
+/**
+ * Columns `update()` may write. Any other key in the patch is ignored.
+ * Object keys are interpolated as SQL identifiers, so this allowlist is what
+ * keeps a stray/dynamic key (e.g. from a synced payload) from reaching the
+ * statement. Lifecycle columns (id, created_at, updated_at, deleted_at, dirty,
+ * server_updated_at, sync_error) are managed by dedicated helpers instead.
+ */
+const UPDATABLE_COLUMNS = new Set<keyof DocumentRow>([
+  'format',
+  'title',
+  'author',
+  'local_uri',
+  'text_dir',
+  'cover_uri',
+  'cover_width',
+  'cover_height',
+  'content_hash',
+  'size_bytes',
+  'encoding',
+  'normalization_version',
+  'chapter_count',
+  'char_count',
+  'storage_path',
+  'last_opened_at',
+]);
+
 export const documents = {
   /**
    * Library listing. Always LEFT JOINs reading_progress so each row carries the
@@ -223,7 +249,7 @@ export const documents = {
     const params: (string | number | null)[] = [now];
 
     for (const [key, value] of Object.entries(patch)) {
-      if (key === 'updated_at' || key === 'dirty' || key === 'id') continue;
+      if (!UPDATABLE_COLUMNS.has(key as keyof DocumentRow)) continue;
       setClauses.push(`${key} = ?`);
       params.push(value as string | number | null);
     }

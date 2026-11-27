@@ -1,6 +1,7 @@
 import { usePathname, useRouter } from 'expo-router';
 import React from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { AccessibilityInfo, Pressable, ScrollView, Text, View } from 'react-native';
+import Animated, { FadeIn } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Icon, IconButton, type IconName } from '@/components/ui/icon';
@@ -146,6 +147,9 @@ export function ChromeProvider({ children }: { children: React.ReactNode }) {
 
   const toast = React.useCallback((message: string, action?: ToastAction, durationMs = 2800) => {
     setToastData({ message, action });
+    // Announce toasts (including the Undo action) so screen reader users hear
+    // confirmations and failures that are otherwise purely visual.
+    AccessibilityInfo.announceForAccessibility(action ? `${message}. ${action.label}` : message);
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => setToastData(null), durationMs);
   }, []);
@@ -281,6 +285,10 @@ function SideDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
 /**
  * Standard screen chrome: top safe-area padding, optional bottom tab bar.
  * Screens render their own AppBar and content inside.
+ *
+ * The root fades in on mount so every screen's native slide transition is
+ * softened by a slight cross-fade. Reanimated disables the fade when the
+ * system Reduce Motion setting is on.
  */
 export function Screen({
   children,
@@ -295,9 +303,12 @@ export function Screen({
   const navMode = get(SettingKeys.deviceNavMode);
 
   return (
-    <View className="flex-1 bg-bg" style={{ paddingLeft: insets.left, paddingRight: insets.right, paddingBottom: !showNav || navMode === 'side' ? insets.bottom : 0 }}>
+    <Animated.View
+      className="flex-1 bg-bg"
+      entering={FadeIn.duration(220)}
+      style={{ paddingLeft: insets.left, paddingRight: insets.right, paddingBottom: !showNav || navMode === 'side' ? insets.bottom : 0 }}>
       <View style={{ flex: 1, paddingTop: insets.top }}>{children}</View>
       {showNav && navMode === 'bottom' && <BottomNav />}
-    </View>
+    </Animated.View>
   );
 }

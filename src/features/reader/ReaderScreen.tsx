@@ -36,7 +36,13 @@ import { contrastText, linkColor } from '@/lib/color';
 import { chunkChapter } from '@/text/chunk';
 import { useAppTheme } from '@/theme/ThemeProvider';
 import { ThemePalettes } from '@/theme/palette';
-import { bookPercent, bookSliderDestination, displayPercent } from '@/text/position';
+import {
+  bookPercent,
+  bookSliderDestination,
+  chapterTurnDestination,
+  displayPercent,
+  progressLabel,
+} from '@/text/position';
 import { ChunkedChapter } from './ChunkedChapter';
 import type { ProgressInput } from '@/db/repositories/progress';
 import { ContentsPanel } from './ContentsPanel';
@@ -52,6 +58,7 @@ import type { BookmarkRow } from '@/db/repositories/bookmarks';
 import type { HighlightRow } from '@/db/repositories/highlights';
 import type { DocumentRow } from '@/db/repositories/documents';
 import { logger } from '@/lib/logger';
+import { haptics } from '@/lib/haptics';
 
 type Overlay = 'none' | 'menu' | 'panel' | 'display' | 'search';
 type ResolvedBookLink = ReturnType<typeof resolveBookLink>;
@@ -129,16 +136,18 @@ function BookReader({ id }: { id: string }) {
     });
     return () => { waitingForInitialValue = false; subscription.remove(); };
   }, []);
-  const [chIdx, setChIdx] = useState(0);
+  const [activeChapter, setActiveChapter] = useState<{ index: number; page: LoadedChapter | null }>({
+    index: 0,
+    page: null,
+  });
+  const chIdx = activeChapter.index;
+  const loaded = activeChapter.page;
   const [frac, setFrac] = useState(0);
   const [scrub, setScrub] = useState<number | null>(null);
   const [bms, setBms] = useState<BookmarkRow[]>([]);
   const [hls, setHls] = useState<HighlightRow[]>([]);
   const [selection, setSelection] = useState<ReaderSelection | null>(null);
   const [pmDismissed, setPmDismissed] = useState(false);
-
-  // Display-popup scope: 'all' edits the synced default, 'book' a per-book override.
-  const [scope, setScope] = useState<'all' | 'book'>('all');
 
   // Reading style: synced default + optional per-book override (changed fields only).
   const defaultStyle = useMemo<ReadingStyle>(
@@ -158,7 +167,6 @@ function BookReader({ id }: { id: string }) {
   const hasOverride = !!bookOverride && Object.keys(bookOverride).length > 0;
   const style: ReadingStyle = { ...defaultStyle, ...(bookOverride ?? {}) };
 
-  const [loaded, setLoaded] = useState<LoadedChapter | null>(null);
   const [navigationRevision, setNavigationRevision] = useState(0);
   const [ready, setReady] = useState(false);
   const activeText = loaded?.index === chIdx ? loaded.text : null;
@@ -198,7 +206,7 @@ function BookReader({ id }: { id: string }) {
       const { row, index, offset } = resumePosition(rows, saved);
       lastOffset.current = (row?.start_offset ?? 0) + offset;
       setFrac(row?.char_count ? offset / row.char_count : 0);
-      setChIdx(index);
+      setActiveChapter({ index, page: null });
       setChs(rows);
       setDoc(d);
       setReady(true);
@@ -242,7 +250,9 @@ function BookReader({ id }: { id: string }) {
     if (!ch || loaded?.index === chIdx) return;
     let cancelled = false;
     loadChapter(chIdx).then((page) => {
-      if (!cancelled) setLoaded(page);
+      if (!cancelled) {
+        setActiveChapter(current => current.index === page.index ? { ...current, page } : current);
+      }
     }).catch(() => {
       if (!cancelled) setLoadError('This chapter could not be read from device storage.');
     });
@@ -290,7 +300,8 @@ function BookReader({ id }: { id: string }) {
       setDirection(row.start_offset + offset < lastOffset.current || index < chIdx ? -1 : 1);
       skipEntrance.current = swipeCompleted;
       setOverlay('none');
-      setLoaded(page);
+      setActiveChapter({ index, page });
+      haptics.impact();
     } catch {
       if (request.current === ticket) toast('This chapter could not be opened');
       return;
@@ -299,7 +310,6 @@ function BookReader({ id }: { id: string }) {
     setControlsVisible(false);
     setLoadError(null);
     setSelection(null);
-    setChIdx(index);
     setNavigationRevision((revision) => revision + 1);
   }, [chs, chIdx, loaded, loadChapter, recordPosition, toast]);
 
@@ -409,6 +419,7 @@ function BookReader({ id }: { id: string }) {
       snippet: snippet || null,
     });
     setBms(await bookmarksRepo.list(doc.id));
+    haptics.success();
     toast('Bookmark added');
   }, [doc, ch, charCount, chIdx, activeText, toast]);
 
@@ -416,11 +427,13 @@ function BookReader({ id }: { id: string }) {
     async (bid: string) => {
       await bookmarksRepo.softDelete(bid).catch(() => {});
       if (doc) setBms(await bookmarksRepo.list(doc.id).catch(() => []));
+      haptics.warning();
       toast('Bookmark removed', {
         label: 'Undo',
         onPress: async () => {
           await bookmarksRepo.restore(bid).catch(() => {});
           if (doc) setBms(await bookmarksRepo.list(doc.id).catch(() => []));
+          haptics.success();
         },
       }, 5000);
     },
@@ -430,11 +443,13 @@ function BookReader({ id }: { id: string }) {
   const deleteHighlight = useCallback(async (hid: string) => {
     await highlightsRepo.softDelete(hid).catch(() => {});
     if (doc) setHls(await highlightsRepo.list(doc.id).catch(() => []));
+    haptics.warning();
     toast('Highlight removed', {
       label: 'Undo',
       onPress: async () => {
         await highlightsRepo.restore(hid).catch(() => {});
         if (doc) setHls(await highlightsRepo.list(doc.id).catch(() => []));
+        haptics.success();
       },
     }, 5000);
   }, [doc, toast]);
@@ -453,11 +468,13 @@ function BookReader({ id }: { id: string }) {
       await highlightsRepo.softDelete(hid);
       if (doc) setHls(await highlightsRepo.list(doc.id));
       setSelection(null);
+      haptics.warning();
       toast('Highlight removed', {
         label: 'Undo',
         onPress: async () => {
           await highlightsRepo.restore(hid).catch(() => {});
           if (doc) setHls(await highlightsRepo.list(doc.id));
+          haptics.success();
         },
       }, 5000);
     } catch {
@@ -497,17 +514,9 @@ function BookReader({ id }: { id: string }) {
   // --- Display popup ---------------------------------------------------------------
   const applyStyle = useCallback(
     (patch: Partial<ReadingStyle>) => {
-      if (scope === 'book' && id) {
-        setJson(bookKey, { ...(bookOverride ?? {}), ...patch });
-      } else {
-        const current =
-          normalizeStylePatch(
-            getJson<Partial<ReadingStyle>>(SettingKeys.readerStyle)
-          ) ?? DEFAULT_READING_STYLE;
-        setJson(SettingKeys.readerStyle, { ...current, ...patch });
-      }
+      if (id) setJson(bookKey, { ...(bookOverride ?? {}), ...patch });
     },
-    [scope, id, bookKey, bookOverride, getJson, setJson]
+    [id, bookKey, bookOverride, setJson]
   );
 
   const resetBook = useCallback(async () => {
@@ -555,7 +564,8 @@ function BookReader({ id }: { id: string }) {
   const bookScope = percentageMode === 'book';
   const progressFraction = bookScope && ch ? bookPercent(ch.start_offset + frac * ch.char_count, charCount) : frac;
   const percent = displayPercent(scrub === null ? progressFraction : scrub / 100);
-  const label = bookScope ? `${percent}% of book` : `Ch. ${chIdx + 1} of ${chs.length} · ${percent}%`;
+  const label = progressLabel(percent, bookScope ? 'book' : 'chapter', chIdx, chs.length,
+    get(SettingKeys.readerProgressChapterCount));
 
   // Ask-once progress display prompt (plan 5.8): multi-chapter docs only.
   const pmPrompt =
@@ -565,6 +575,7 @@ function BookReader({ id }: { id: string }) {
   const fontSize = BASE_FONT_SIZE * (style.size / 100);
   const marginH = (winWidth * style.mar) / 100 + Math.max(insets.left, insets.right);
   const showControls = controlsVisible || screenReader || !!loadError;
+  const canTapReader = overlay === 'none' && !selection && !linkPopup && !supplementVisible;
   const transition = get(SettingKeys.readerTransition);
   const duration = reducedMotion || transition === 'none' ? 0
     : { fast: 130, normal: 220, slow: 360 }[get(SettingKeys.readerTransitionSpeed)];
@@ -707,13 +718,13 @@ function BookReader({ id }: { id: string }) {
     );
   }
   async function prepareChapter(step: Direction, atEnd: boolean) {
-    const index = chIdx + step;
-    if (!chs[index]) return null;
+    const target = chapterTurnDestination(chIdx, step, chs.length, atEnd);
+    if (!target) return null;
     try {
-      const page = await loadChapter(index);
-      return { view: <BookPassage {...passageProps(page)} page={page} initialOffset={atEnd ? page.text.length : 0}
-        onMove={() => {}} onLink={() => {}} footer={nextButtonFor(index)} />,
-        commit: () => { void jumpToChapter(index, atEnd ? 1 : 0, page, true); } };
+      const page = await loadChapter(target.index);
+      return { view: <BookPassage {...passageProps(page)} page={page} initialOffset={target.fraction ? page.text.length : 0}
+        onMove={() => {}} onLink={() => {}} footer={nextButtonFor(target.index)} />,
+        commit: () => { void jumpToChapter(target.index, target.fraction, page, true); } };
     } catch { toast('This chapter could not be opened'); return null; }
   }
 
@@ -798,14 +809,20 @@ function BookReader({ id }: { id: string }) {
               inputRange: [0, 1], outputRange: [transition === 'slide' ? direction * winWidth * 0.20 : 0, 0],
             }) }] }}>
               <BookPassage key={[chIdx, navigationRevision, winWidth, style.fam, style.size, style.lh,
-                style.wt, style.mar, style.align, style.indentParagraphs, style.indentLength].join('/')}
+                style.wt, style.mar, style.align, style.indentParagraphs, style.indentLength,
+                style.headingAlign, style.headingUnderline].join('/')}
                 {...passageProps(loaded!)} page={loaded!} initialOffset={() => Math.max(0, Math.min(ch.char_count, lastOffset.current - ch.start_offset))}
                 onMove={offset => recordPosition(chIdx, offset)} onLink={followLink}
-                onToggleControls={() => { setOverlay('none'); setControlsVisible(overlay !== 'none' ? false : !controlsVisible); }}
+                onToggleControls={canTapReader
+                  ? () => { setOverlay('none'); setControlsVisible(overlay !== 'none' ? false : !controlsVisible); }
+                  : undefined}
                 onScrollStart={hideReaderControls} paged={turnByViewport} edgeTaps={!screenReader && get(SettingKeys.readerEdgeTaps)}
-                onPageTurn={step => { setDirection(step); hideReaderControls(); animatePage(); }}
+                onPageTurn={step => { haptics.impact(); setDirection(step); hideReaderControls(); animatePage(); }}
                 prepareChapter={prepareChapter}
-                onChapterSwipe={chs.length > 1 && !screenReader ? (step, atEnd) => jumpToChapter(chIdx + step, atEnd ? 1 : 0) : undefined}
+                onChapterSwipe={chs.length > 1 && !screenReader ? (step, atEnd) => {
+                  const target = chapterTurnDestination(chIdx, step, chs.length, atEnd);
+                  if (target) void jumpToChapter(target.index, target.fraction);
+                } : undefined}
                 footer={nextButtonFor(chIdx)} />
 
             </Animated.View>
@@ -895,10 +912,9 @@ function BookReader({ id }: { id: string }) {
           visible={overlay === 'display'}
           toolbarHeight={toolbarHeight}
           onClose={() => setOverlay('none')}
-          style={scope === 'book' ? style : defaultStyle}
-          scope={scope}
-          onScopeChange={setScope}
+          style={style}
           hasOverride={hasOverride}
+          headingDetected={!!nav?.paragraphs?.some(paragraph => paragraph.heading)}
           onResetBook={resetBook}
           brightness={brightnessSetting}
           onBrightness={setBrightness}
@@ -920,9 +936,11 @@ function BookReader({ id }: { id: string }) {
                   </Text>
                   <IconButton icon="close" label="Return to reading" tone={style.tx} onPress={() => setSupplementVisible(false)} />
                 </View>
-                <ChunkedChapter key={[supplement.revision, style.indentParagraphs, style.indentLength].join('/')} chunks={supplementChunks}
+                <ChunkedChapter key={[supplement.revision, style.indentParagraphs, style.indentLength,
+                  style.headingAlign, style.headingUnderline].join('/')} chunks={supplementChunks}
                   linkText={supplement.section.text}
                   publisherStyles={supplement.section.navigation.styles} paragraphs={supplement.section.navigation.paragraphs} mediaDir={doc?.text_dir}
+                  headingAlign={style.headingAlign} headingUnderline={style.headingUnderline}
                   length={supplement.section.text.length} links={supplement.section.navigation.links}
                   linkColor={linkColor(style.bg)} onLink={followLink} initialOffset={supplement.offset}
                   margin={winWidth * style.mar / 100} textStyle={{ color: style.tx, fontFamily, fontSize, lineHeight: Math.round(fontSize * style.lh) }}

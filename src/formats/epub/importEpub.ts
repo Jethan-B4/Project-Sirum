@@ -3,6 +3,14 @@ import * as fflate from 'fflate';
 import { File, FileMode } from 'expo-file-system';
 import * as FileSystem from 'expo-file-system/legacy';
 import { scanEntries } from './archiveEntries';
+import {
+  ArchiveRejectedError,
+  assertArchiveCompressedSize,
+  assertNoXmlDoctype,
+  createArchiveGuard,
+  MAX_SELECTED_ARCHIVE_BYTES,
+  normalizeArchivePath,
+} from './archiveSafety';
 import { extractChapterHtml } from './chapterHtml';
 import { cacheAsset, emptyAssets, isPublicationAsset, saveAssets } from './publicationAssets';
 import * as htmlparser2 from 'htmlparser2';
@@ -53,6 +61,12 @@ function base64ToUint8Array(b64: string): Uint8Array {
 
 async function readArchiveBytes(uri: string): Promise<Uint8Array> {
   const file = new File(uri);
+  const declaredSize = file.info().size;
+  if (declaredSize != null) assertArchiveCompressedSize(declaredSize);
+  const checkedBytes = (bytes: Uint8Array) => {
+    assertArchiveCompressedSize(bytes.length);
+    return bytes;
+  };
 
   // Strategy 1: Chunked stream read via FileHandle
   // Streams through bounded 2 MB buffers into Hermes native typed array,
@@ -71,27 +85,30 @@ async function readArchiveBytes(uri: string): Promise<Uint8Array> {
           out.set(chunk, offset);
           offset += chunk.length;
         }
-        return out;
+        return checkedBytes(out);
       }
     } finally {
       handle.close();
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof ArchiveRejectedError) throw error;
     /* fallback to file.bytes() */
   }
 
   // Strategy 2: Direct file.bytes()
   try {
-    return await file.bytes();
-  } catch {
+    return checkedBytes(await file.bytes());
+  } catch (error) {
+    if (error instanceof ArchiveRejectedError) throw error;
     /* fallback to file.arrayBuffer() */
   }
 
   // Strategy 3: Direct file.arrayBuffer()
   try {
     const buf = await file.arrayBuffer();
-    return new Uint8Array(buf);
-  } catch {
+    return checkedBytes(new Uint8Array(buf));
+  } catch (error) {
+    if (error instanceof ArchiveRejectedError) throw error;
     /* fallback to legacy Base64 */
   }
 
@@ -99,24 +116,26 @@ async function readArchiveBytes(uri: string): Promise<Uint8Array> {
   const b64 = await FileSystem.readAsStringAsync(uri, {
     encoding: FileSystem.EncodingType.Base64,
   });
-  return base64ToUint8Array(b64);
+  return checkedBytes(base64ToUint8Array(b64));
 }
 
 const NON_TEXT_ASSETS = /\.(ttf|otf|woff|woff2|eot|mp3|mp4|wav|m4a|webm|avi|mkv)$/i;
 
-function archivePath(rawKey: string) {
-  return rawKey.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\//, '');
-}
-
 const xmlParser = new XMLParser({
-    ignoreAttributes: false,
-    attributeNamePrefix: '@_',
-    removeNSPrefix: true,
-  });
+  ignoreAttributes: false,
+  attributeNamePrefix: '@_',
+  removeNSPrefix: true,
+  processEntities: false,
+});
+
+function parseXml(xml: string) {
+  assertNoXmlDoctype(xml);
+  return xmlParser.parse(xml);
+}
 
 export function packagePath(containerBytes: Uint8Array): string {
   const containerXml = fflate.strFromU8(containerBytes);
-  const containerObj = xmlParser.parse(containerXml);
+  const containerObj = parseXml(containerXml);
   const rootfiles = containerObj?.container?.rootfiles?.rootfile;
   const rootfileList = Array.isArray(rootfiles) ? rootfiles : [rootfiles];
   const mainRootfile = rootfileList.find(
@@ -159,7 +178,7 @@ function packageInfo(entry: (name: string) => Uint8Array | undefined) {
 
   const opfDir = opfPath.includes('/') ? opfPath.slice(0, opfPath.lastIndexOf('/')) : '';
   const opfXml = fflate.strFromU8(opfBytes);
-  const opfObj = xmlParser.parse(opfXml);
+  const opfObj = parseXml(opfXml);
   const pkg = opfObj?.package;
   if (!pkg) {
     throw new Error('Invalid EPUB: <package> element missing in OPF.');
@@ -227,15 +246,16 @@ function packageInfo(entry: (name: string) => Uint8Array | undefined) {
 
   const coverPath = coverHref ? resolvePath(opfDir, coverHref) : undefined;
   const coverData = coverPath ? entry(coverPath) : undefined;
-  return { xmlParser, opfDir, pkg, metadata, manifestById, coverData, coverPath };
+  return { opfDir, pkg, metadata, manifestById, coverData, coverPath };
 }
 
 /** Extract only the package metadata and named cover when repairing an existing book. */
 export async function readEpubCover(uri: string) {
   const bytes = await readArchiveBytes(uri);
   const info = packageInfo((name) => {
+    const guard = createArchiveGuard();
     const entries = fflate.unzipSync(bytes, {
-      filter: (entry) => archivePath(entry.name) === name,
+      filter: (entry) => guard(entry.name, entry.originalSize) === name,
     });
     return Object.values(entries)[0];
   });
@@ -249,28 +269,38 @@ export async function importEpub(uri: string, opts: EpubOpts): Promise<ImportedB
   // Unzip entries, skipping heavy embedded fonts and multimedia unused by the text reader
   let hasImages = false;
   let unzipped: fflate.Unzipped;
+  const guard = createArchiveGuard();
+  let selectedBytes = 0;
   try {
     unzipped = fflate.unzipSync(fileBytes, {
       filter(entry) {
-        if (isPublicationAsset(entry.name) && !/\.css$/i.test(entry.name)) {
+        const name = guard(entry.name, entry.originalSize);
+        const isUnusedAsset = isPublicationAsset(name) && !/\.css$/i.test(name);
+        if (isUnusedAsset) {
           hasImages = true;
           return false;
         }
-        return !NON_TEXT_ASSETS.test(entry.name);
+        if (NON_TEXT_ASSETS.test(name)) return false;
+        selectedBytes += entry.originalSize;
+        if (selectedBytes > MAX_SELECTED_ARCHIVE_BYTES) {
+          throw new ArchiveRejectedError('selected content exceeds the size limit.');
+        }
+        return true;
       },
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof ArchiveRejectedError) throw error;
     throw new Error('Failed to unpack EPUB archive. The file may be damaged or not a valid ZIP.');
   }
 
   // Normalize path keys
   const zip: Record<string, Uint8Array> = {};
   for (const rawKey of Object.keys(unzipped)) {
-    const key = archivePath(rawKey);
+    const key = normalizeArchivePath(rawKey);
     zip[key] = unzipped[rawKey];
   }
 
-  const { xmlParser, opfDir, pkg, metadata, manifestById, coverPath } = packageInfo((name) => zip[name]);
+  const { opfDir, pkg, metadata, manifestById, coverPath } = packageInfo((name) => zip[name]);
   const assets = emptyAssets();
   const dir = opts.chaptersDir;
   for (const name of Object.keys(zip)) {
@@ -362,7 +392,7 @@ export async function importEpub(uri: string, opts: EpubOpts): Promise<ImportedB
     const ncxBytes = zip[ncxPath];
     if (ncxBytes) {
       const ncxXml = fflate.strFromU8(ncxBytes);
-      const ncxObj = xmlParser.parse(ncxXml);
+      const ncxObj = parseXml(ncxXml);
       const ncxDir = ncxPath.includes('/') ? ncxPath.slice(0, ncxPath.lastIndexOf('/')) : '';
       const extractNavPoints = (points: any) => {
         if (!points) return;

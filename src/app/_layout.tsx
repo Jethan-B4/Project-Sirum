@@ -27,9 +27,11 @@ export default function RootLayout() {
             <Stack
               screenOptions={{
                 headerShown: false,
-                animation: 'none',
+                // Destination-based push/pop: a screen entered from the library,
+                // history or settings slides in from the right, and going back
+                // plays the reverse. The reader overrides this below.
+                animation: 'slide_from_right',
               }}>
-              {/* Keep primary navigation immediate; screen transitions previously flashed during mount. */}
               <Stack.Screen name="index" />
               <Stack.Screen name="history" />
               <Stack.Screen name="import" />

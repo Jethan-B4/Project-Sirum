@@ -13,6 +13,7 @@ import { documents, type LibraryDocument } from '@/db/repositories/documents';
 import { useSettings } from '@/features/settings/SettingsProvider';
 import { type AppTheme, useAppTheme } from '@/theme/ThemeProvider';
 import { contrastText } from '@/lib/color';
+import { haptics } from '@/lib/haptics';
 import { logger } from '@/lib/logger';
 import {
   SettingKeys,
@@ -150,12 +151,18 @@ export default function LibraryScreen() {
     }
   }, [books.length, has, orderPromptDismissed, set]);
 
+  const requestDelete = useCallback((book: LibraryDocument) => {
+    haptics.select();
+    setBookToDelete(book);
+  }, []);
+
   const confirmDeleteBook = useCallback(async () => {
     if (!bookToDelete) return;
     const target = bookToDelete;
     setBookToDelete(null);
     try {
       await documents.softDelete(target.id);
+      haptics.warning();
       load(() => true).catch(() => {});
       toast(
         `Removed “${target.title}”`,
@@ -163,6 +170,7 @@ export default function LibraryScreen() {
           label: 'Undo',
           onPress: async () => {
             await documents.restore(target.id);
+            haptics.success();
             load(() => true).catch(() => {});
           },
         },
@@ -280,7 +288,7 @@ export default function LibraryScreen() {
             <BookRow
               book={item}
               onPress={openBook}
-              onLongPress={(b) => setBookToDelete(b)}
+              onLongPress={requestDelete}
             />
           )}
           contentContainerStyle={styles.listContent}
@@ -301,7 +309,7 @@ export default function LibraryScreen() {
                 showBadges={showBadges}
                 showDetails={showDetails}
                 onPress={openBook}
-                onLongPress={(b) => setBookToDelete(b)}
+                onLongPress={requestDelete}
               />
             </View>
           )}
